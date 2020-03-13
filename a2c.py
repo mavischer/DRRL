@@ -1,5 +1,7 @@
-"""
-Adapted from https://github.com/MorvanZhou/pytorch-A3C/blob/master/discrete_A3C.py
+"""Script to run advantage-actor-critic training of the DRRL architecture on a BoxWorld task.
+Make sure to have the gym-boxworld environment registered: https://github.com/mavischer/Box-World
+Script made with, among others, inspiration from https://github.com/MorvanZhou/pytorch-A3C/ and
+https://lilianweng.github.io/lil-log/2018/04/08/policy-gradient-algorithms.html.
 """
 import torch
 import torch.multiprocessing as mp
@@ -7,7 +9,6 @@ import gym
 from DRRL.attention_module import DRRLnet
 from torch.distributions import Categorical
 import os
-import matplotlib.pyplot as plt
 import argparse
 import yaml
 
@@ -242,9 +243,11 @@ if __name__ == "__main__":
         if i_step%1 == 0: #save global network
             save_step(i_step, g_net, steps, losses)
 
-    # plt.plot(steps, losses)
+    if config["plot"]:
+        import matplotlib.pyplot as plt
+        plt.plot(steps, losses)
 
-    if config["visualize"]:
+    if config["tensorboard"]:
         from torch.utils.tensorboard import SummaryWriter
         # create writers
         g_writer = SummaryWriter(os.path.join(SAVEPATH, "tb_g_net"))
