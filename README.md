@@ -8,7 +8,8 @@ The Box-World environment used in this script can be found at [this repo](https:
 
 Training is performed in `a2c.py`, the relational module and general architecture are both implemented as `torch.nn.Module` in `attention_module.py`.
 An example YAML config file parsed from the arguments is `exmpl_config.yml`. Both environment and network can be parameterized there.
-A suitable environment can be created using `requirements.txt` or `environment.yml`. Afterwards install and register the [Box-World environment](https://github.com/mavischer/Box-World) by cloning the repo and `pip install -e gym-boxworld`.
+A suitable environment can be created e.g. by  `conda env create -f environment.yml` or 
+ `pip install -r requirements.txt`. Afterwards install and register the [Box-World environment](https://github.com/mavischer/Box-World) by cloning the repo and `pip install -e gym-boxworld`.
 
 The network's graph can be visualized using tensorboard.
 
