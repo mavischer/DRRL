@@ -6,7 +6,7 @@ https://lilianweng.github.io/lil-log/2018/04/08/policy-gradient-algorithms.html.
 import torch
 import torch.multiprocessing as mp
 import gym
-from DRRL.attention_module import DRRLnet
+from attention_module import DRRLnet
 from torch.distributions import Categorical
 import os
 import argparse
