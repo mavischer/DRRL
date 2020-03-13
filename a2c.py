@@ -8,32 +8,44 @@ from DRRL.attention_module import DRRLnet
 from torch.distributions import Categorical
 import os
 import matplotlib.pyplot as plt
+import argparse
+import yaml
 
+#parse yaml config file from cmdline
+parser = argparse.ArgumentParser(description='PyTorch A2C BoxWorld Experiment')
+parser.add_argument("-c", "--configpath", type=str, required=True, help="path/to/configfile.yml")
+parser.add_argument("-s", "--savepath", type=str, required=True, help="path/to/savedirectory")
+args = parser.parse_args()
+with open(os.path.abspath(args.configpath), 'r') as file:
+        config = yaml.safe_load(file)
+SAVEPATH = args.savepath
 
-torch.manual_seed(123)
+#set stage
+if not os.path.isdir(SAVEPATH):
+    os.mkdir(SAVEPATH)
+torch.manual_seed(config["seed"])
+ENV_CONFIG = config["env_config"]
+if config["n_cpus"] == 1:
+    config["n_cpus"] = mp.cpu_count()
+N_W = mp.cpu_count() if (config["n_cpus"] == -1) else 3
+g_device = torch.device("cuda" if torch.cuda.is_available() else "cpu") #todo: schedule workers to cpus manually?
+with open(os.path.join(SAVEPATH, "config.yml"), "w+") as f:
+    f.write(yaml.dump(config))
 
-ENV_CONFIG = {"n": 8,
-              "goal_length": 3,
-              "num_distractor": 2,
-              "distractor_length": 2}
-
+#make environment
 env = gym.make('gym_boxworld:boxworld-v0', **ENV_CONFIG)
-env.seed(1)
-g_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-N_W = 3# mp.cpu_count()
-#todo: schedule workers to cpus
 N_ACT = env.action_space.n
 INP_W = env.observation_space.shape[0]
 INP_H = env.observation_space.shape[1]
 
-GAMMA = 0.99 #TODO: CHECK THIS
-SAVEPATH = os.path.join("." ,"save")
-os.mkdir(SAVEPATH)
+#configure learning
+N_STEP = config["n_step"]
+GAMMA = config["gamma"]
 
 # #todo: check whether we really need this?
 # class SharedAdam(torch.optim.Adam):
 #     """Shared optimizer, the parameters in the optimizer will be shared across multiprocessors."""
-#     def __init__(self, params, lr=1e-3, betas=(0.9, 0.9), eps=1e-8, #todo: defaults 0.99
+#     def __init__(self, params, lr=1e-3, betas=(0.9, 0.9), eps=1e-8,
 #                  weight_decay=0):
 #         super(SharedAdam, self).__init__(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
 #         # State initialization
@@ -121,7 +133,8 @@ class Worker(mp.Process):
 
         #cast everything to tensors (states are already cast)
         s_ = torch.cat(s_)
-        a_ = torch.tensor(a_, dtype=torch.uint8, device=self.device)
+        a_ = torch.tensor(a_, dtype=torch.uint8, device=self.device) #torch can only compute gradients for float
+        # tensors, but this shouldn't be a problem
         r_disc = torch.tensor(r_disc, dtype=torch.float16, device=self.device)
 
         return(s_,a_,r_disc)
@@ -129,7 +142,6 @@ class Worker(mp.Process):
     def pull_params(self):
         """Update own params from global network."""
         self.l_net.load_state_dict(self.g_net.state_dict(), strict=True)
-
 
 def update_step(net, trajectories, opt, opt_step):
     """Calculate advantage-actor-critic loss on batch with network, updates parameters
@@ -154,8 +166,10 @@ def update_step(net, trajectories, opt, opt_step):
     a_loss = - m.log_prob(b_a) * td.detach().squeeze()
     #entropy term
     e_loss = m.entropy()
-    e_w = min(1, 2*0.995**opt_step)
-    total_loss = (0.5*c_loss + a_loss + e_w*e_loss).mean() #todo: entropy annealing! #what happens without mean?
+    # e_w = min(1, 2*0.995**opt_step) #todo: check entropy annealing!
+    e_w = 0.005 #like in paper
+    total_loss = (0.5*c_loss + a_loss + e_w*e_loss).mean() #todo: Adam seems to be able to handle not meaning,
+    # RMSprop wants scalar losses: "RuntimeError: grad can be implicitly created only for scalar outputs"
     #global network: zero gradients, back-propagate loss, update params
     opt.zero_grad()
     total_loss.backward()
@@ -164,10 +178,9 @@ def update_step(net, trajectories, opt, opt_step):
 
 def save_step(i_step, g_net, steps, losses):
     try:
-        ending = f"{i_step:05}.pickle"
-        torch.save(g_net.state_dict(), os.path.join(SAVEPATH, "g_net"+ending))
-        torch.save(steps, os.path.join(SAVEPATH, "steps"+ending))
-        torch.save(losses, os.path.join(SAVEPATH, "losses"+ending))
+        ending = f"{i_step:05}.pt"
+        for name, var in zip(["g_net", "steps", "losses"], [g_net.state_dict(), steps, losses]):
+            torch.save(var, os.path.join(SAVEPATH, name+ending))
     except Exception as e:
         print(f"failed to write step {i_step} to disk:")
         print(e)
@@ -189,20 +202,32 @@ def load_step(path):
 if __name__ == "__main__":
     #create global network and pipeline
     g_net = DRRLnet(INP_W, INP_H, N_ACT).to(g_device) # global network
-    g_net.share_memory()  # share the global parameters in multiprocessing
+    #todo: only implicit init so far
+    g_net.share_memory()  # share the global parameters in multiprocessing #todo: check whether this makes a difference
     # optimizer = SharedAdam(g_net.parameters(), lr=0.0001)  # global optimizer
-    optimizer = torch.optim.Adam(g_net.parameters()) #todo: check parameters in paper
+    if config["optimizer"] == "RMSprop":
+        #RMSprop optimizer was used for the large state space, not the small ones and impala instead of a3c.
+        # "Learning rate was tuned between 1e-5 and 2e-4" means linearly decaying during training? ->
+        # torch.optim.lr_scheduler
+        #momentum 0, epsilon 0.1, decay term 0.99, is this called "alpha" in torch?
+        optimizer = torch.optim.RMSprop(g_net.parameters(), eps=0.1, lr=1e-4) #todo: ask Rob about whether to change
+        # the params
+    else:
+        #Adam optimizer was used for the starcraft games with learning rate decaying linearly over 1e10 steps from
+        # 1e-4 to 1e-5. other params are torch defaults
+        optimizer = torch.optim.Adam(g_net.parameters(),lr=1e-4)
     g_step = 0 # mp.Value('i', 0) #global step counter
     # g_ep = mp.Value('i', 0) #global episode counter
     # g_ep_r = mp.Value('d', 0.) #global reward counter
     # res_queue = mp.Queue() #queue to push trajectories to
-    N_STEP = 10
 
     #create workers
     losses = []
     steps = []
     trajectories = []
     workers = [Worker(g_net, i) for i in range(N_W)]
+
+    [w.pull_params() for w in workers] #make workers identical copies of global network before training begins
     for i_step in range(N_STEP): #performing one parallel update step
         #parallel trajectory sampling
         trajectories = [w.start() for w in workers] #list comprehension automatically waits for workers to finish
@@ -213,8 +238,22 @@ if __name__ == "__main__":
         #bookkeeping
         g_step += sum([len(traj[0])for traj in trajectories])
         steps.append(g_step)
-        losses.append(loss)
+        losses.append(loss.item())
         if i_step%1 == 0: #save global network
             save_step(i_step, g_net, steps, losses)
 
-    plt.plot(steps, losses)
+    # plt.plot(steps, losses)
+
+    if config["visualize"]:
+        from torch.utils.tensorboard import SummaryWriter
+        # create writers
+        g_writer = SummaryWriter(os.path.join(SAVEPATH, "tb_g_net"))
+        l_writer = SummaryWriter(os.path.join(SAVEPATH, "tb_l_net"))
+        # write graph to file
+        rezip = zip(*trajectories)
+        b_s, _, _ = [torch.cat(elems) for elems in list(rezip)]  # concatenate torch tensors of all trajectories
+        g_writer.add_graph(g_net,b_s)
+        l_writer.add_graph(workers[0].l_net,b_s)
+        g_writer.close()
+        l_writer.close()
+

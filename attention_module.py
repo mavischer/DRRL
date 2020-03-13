@@ -32,7 +32,7 @@ import torch.autograd
 
 class AttentionHead(nn.Module):
 
-    def __init__(self, n_elems, elem_size, emb_size):
+    def __init__(self, elem_size, emb_size):
         super(AttentionHead, self).__init__()
         self.sqrt_emb_size = int(math.sqrt(emb_size))
         #queries, keys, values
@@ -63,7 +63,7 @@ class AttentionModule(nn.Module):
         # self.input_shape = input_shape
         # self.elem_size = elem_size
         # self.emb_size = emb_size #honestly not really needed
-        self.heads = [AttentionHead(n_elems, elem_size, emb_size) for _ in range(n_heads)]
+        self.heads =  nn.ModuleList(AttentionHead(elem_size, emb_size) for _ in range(n_heads))
         self.linear1 = nn.Linear(n_heads*elem_size, elem_size)
         self.linear2 = nn.Linear(elem_size, elem_size)
 
@@ -115,9 +115,9 @@ class DRRLnet(nn.Module):
 
         # create x,y coordinate matrices to append to convolution output
         xmap = np.linspace(-np.ones(conv2h), np.ones(conv2h), num=conv2w, endpoint=True, axis=0)
-        xmap = torch.tensor(np.expand_dims(np.expand_dims(xmap,0),0), dtype=torch.float32)
+        xmap = torch.tensor(np.expand_dims(np.expand_dims(xmap,0),0), dtype=torch.float32, requires_grad=False)
         ymap = np.linspace(-np.ones(conv2w), np.ones(conv2w), num=conv2h, endpoint=True, axis=1)
-        ymap = torch.tensor(np.expand_dims(np.expand_dims(ymap,0),0), dtype=torch.float32)
+        ymap = torch.tensor(np.expand_dims(np.expand_dims(ymap,0),0), dtype=torch.float32, requires_grad=False)
         self.xymap = torch.cat((xmap,ymap),dim=1) # shape (1, 2, conv2w, conv2h)
 
         #create attention module with n_heads heads and remember how many times to stack it
@@ -150,7 +150,9 @@ class DRRLnet(nn.Module):
         c = F.relu(self.conv2(c))
         #append x,y coordinates to every sample in batch
         batchsize = c.size(0)
-        batch_maps = torch.cat(batchsize*[self.xymap])
+        # Filewriter complains about the this way of repeating the xymap, hope repeat is just as fine
+        # batch_maps = torch.cat(batchsize*[self.xymap])
+        batch_maps = self.xymap.repeat(batchsize,1,1,1,)
         c = torch.cat((c,batch_maps),1)
         #attentional module
         #careful: we are flattening out x,y dimensions into 1 dimension, so shape changes from (batchsize, #filters,
@@ -163,7 +165,11 @@ class DRRLnet(nn.Module):
         #max pooling over "space", i.e. max scalar within each feature map m x n x f -> f
         # pool over entity dimension #isn't this a problem with gradients?
         # todo: try pooling over feature dimension
-        pooled = F.max_pool1d(a.transpose(1,2), kernel_size=a.size(1)) #pool out entity dimension
+        kernelsize = a.shape[1] #but during forward passes called by SummaryWriter, a.shape[1] returns a tensor instead
+        # of an int. if this causes any trouble it can be replaced by w*h
+        if type(kernelsize) == torch.Tensor:
+            kernelsize = kernelsize.item()
+        pooled = F.max_pool1d(a.transpose(1,2), kernel_size=kernelsize) #pool out entity dimension
         #policy module: 4xFC256, then project to logits and value
         p = F.relu(self.fc1(pooled.view(pooled.size(0),pooled.size(1))))
         p = F.relu(self.fc2(p))
