@@ -118,7 +118,6 @@ class DRRLnet(nn.Module):
     # Called with either one element to determine next action, or a batch
     # during optimization. Returns tensor([[left0exp,right0exp]...]).
     def forward(self, x):
-        print("x:" + str(x.device))
         #convolutional module
         if self.pad:
             x = F.pad(x, (1,0,1,0)) #zero padding so state size stays constant
@@ -131,9 +130,6 @@ class DRRLnet(nn.Module):
         # Filewriter complains about the this way of repeating the xymap, hope repeat is just as fine
         # batch_maps = torch.cat(batchsize*[self.xymap])
         batch_maps = self.xymap.repeat(batchsize,1,1,1,)
-        print("c:" + str(c.device))
-        print("xymap:" + str(self.xymap.device))
-        print("bmap:" + str(batch_maps.device))
         c = torch.cat((c,batch_maps),1)
         #attentional module
         #careful: we are flattening out x,y dimensions into 1 dimension, so shape changes from (batchsize, #filters,
