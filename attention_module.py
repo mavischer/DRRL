@@ -95,7 +95,7 @@ class DRRLnet(nn.Module):
         xmap = torch.tensor(np.expand_dims(np.expand_dims(xmap,0),0), dtype=torch.float32, requires_grad=False)
         ymap = np.linspace(-np.ones(conv2w), np.ones(conv2w), num=conv2h, endpoint=True, axis=1)
         ymap = torch.tensor(np.expand_dims(np.expand_dims(ymap,0),0), dtype=torch.float32, requires_grad=False)
-        self.xymap = torch.cat((xmap,ymap),dim=1) # shape (1, 2, conv2w, conv2h)
+        self.register_buffer("xymap", torch.cat((xmap,ymap),dim=1)) # shape (1, 2, conv2w, conv2h)
 
         #create attention module with n_heads heads and remember how many times to stack it
         self.n_att_stack = n_att_stack #how many times the attentional module is to be stacked (weight-sharing -> reuse)
@@ -118,6 +118,7 @@ class DRRLnet(nn.Module):
     # Called with either one element to determine next action, or a batch
     # during optimization. Returns tensor([[left0exp,right0exp]...]).
     def forward(self, x):
+        print("x:" + str(x.device))
         #convolutional module
         if self.pad:
             x = F.pad(x, (1,0,1,0)) #zero padding so state size stays constant
@@ -130,6 +131,9 @@ class DRRLnet(nn.Module):
         # Filewriter complains about the this way of repeating the xymap, hope repeat is just as fine
         # batch_maps = torch.cat(batchsize*[self.xymap])
         batch_maps = self.xymap.repeat(batchsize,1,1,1,)
+        print("c:" + str(c.device))
+        print("xymap:" + str(self.xymap.device))
+        print("bmap:" + str(batch_maps.device))
         c = torch.cat((c,batch_maps),1)
         #attentional module
         #careful: we are flattening out x,y dimensions into 1 dimension, so shape changes from (batchsize, #filters,
