@@ -11,6 +11,7 @@ from torch.distributions import Categorical
 import os
 import argparse
 import yaml
+import time
 
 #parse yaml config file from cmdline
 parser = argparse.ArgumentParser(description='PyTorch A2C BoxWorld Experiment')
@@ -26,10 +27,12 @@ if not os.path.isdir(SAVEPATH):
     os.mkdir(SAVEPATH)
 torch.manual_seed(config["seed"])
 ENV_CONFIG = config["env_config"]
-if config["n_cpus"] == 1:
+if config["n_cpus"] == -1:
     config["n_cpus"] = mp.cpu_count()
-N_W = mp.cpu_count() if (config["n_cpus"] == -1) else 3
-g_device = torch.device("cuda" if torch.cuda.is_available() else "cpu") #todo: schedule workers to cpus manually?
+N_W = config["n_cpus"]
+g_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"running global net on {g_device}")
+l_device = torch.device("cpu")
 with open(os.path.join(SAVEPATH, "config.yml"), "w+") as f:
     f.write(yaml.dump(config))
 
@@ -63,19 +66,23 @@ GAMMA = config["gamma"]
 
 
 class Worker(mp.Process):
-    def __init__(self, gnet, w_idx, device=g_device): #todo: distribute
+    def __init__(self, gnet, w_idx, device=l_device, verbose=False):
         """
             Args:
                 gnet:   global network that performs parameter updates
                 w_idx:  integer index of worker process for identification
                 device: assigned device
+                verbose:whether to print results of current game (better disable for large number of workers)
         """
         super(Worker, self).__init__()
         self.name = f"w{w_idx}"
         self.g_net = gnet
         self.l_net = DRRLnet(INP_W, INP_H, N_ACT).to(device)  # local network
+        self.l_net.train()  # sets net in training mode so gradient's don't clutter memory
+        print(f"{self.name}: running local net on {l_device}")
         self.env = gym.make('gym_boxworld:boxworld-v0', **ENV_CONFIG)
-        self.device = g_device
+        self.device = device
+        self.verbose = verbose
 
     def start(self):
         """Runs an entire episode, in the end return trajectory as list of s,a,r.
@@ -83,6 +90,7 @@ class Worker(mp.Process):
         Returns:
             Ready-to-digest trajectory as torch.tensors of state, action, reward+discounted future rewards
         """
+        self.l_net.eval() #otherwise gradients clutter memory
         s = self.env.reset()
         s_, a_, r_ = [], [], [] #trajectory of episode goes here
         ep_r = 0. #total episode reward
@@ -102,8 +110,9 @@ class Worker(mp.Process):
             r_.append(r)
 
             if done:  # return trajectory as lists of elements
-                print(f"{self.name}: episode ended after step {ep_t} with total reward {ep_r}")
-                return(self.prettify_trajectory(s_, a_, r_))
+                if self.verbose:
+                    print(f"{self.name}: episode ended after step {ep_t} with total reward {ep_r}")
+                return(self.prettify_trajectory(s_, a_, r_), ep_r)
             s = s_new
             ep_t += 1
 
@@ -157,7 +166,6 @@ def update_step(net, trajectories, opt, opt_step):
     rezip = zip(*trajectories)
     b_s, b_a, b_r_disc = [torch.cat(elems) for elems in list(rezip)] #concatenate torch tensors of all trajectories
 
-    net.train()  # sets net in training mode
     b_p, b_v = net.forward(b_s)
     # critic loss
     td = b_r_disc - b_v
@@ -177,10 +185,18 @@ def update_step(net, trajectories, opt, opt_step):
     opt.step()
     return total_loss.sum()
 
-def save_step(i_step, g_net, steps, losses):
+def save_step(i_step, g_net, steps, losses, rewards):
+    """Saves statistics to global var SAVEPATH and cleans up outdated save files
+    Args:
+        i_step: iteration step
+        g_net: global net's state dictionary containing all variables' values
+        steps: global number of environment steps (all workers combined)
+        losses: global loss of episodes
+        rewards: average rewards of episodes
+    """
     try:
         ending = f"{i_step:05}.pt"
-        for name, var in zip(["g_net", "steps", "losses"], [g_net.state_dict(), steps, losses]):
+        for name, var in zip(["g_net", "steps", "losses", "rewards"], [g_net.state_dict(), steps, losses, rewards]):
             torch.save(var, os.path.join(SAVEPATH, name+ending))
     except Exception as e:
         print(f"failed to write step {i_step} to disk:")
@@ -196,9 +212,23 @@ def save_step(i_step, g_net, steps, losses):
         print("failed to erase old saves:")
         print(e)
 
-def load_step(path):
-    pass
-    # todo: implement
+def load_step():
+    """Loads statistics from global var SAVEPATH and loads g_nets parameters from saved state_dict
+    Returns:
+        list of loaded variables
+            g_net: global net's state dictionary containing all variables' values
+            steps: global number of environment steps (all workers combined)
+            losses: global loss of episodes
+            rewards: average rewards of episodes
+    """
+    loaded_vars = []
+    for name in ["g_net", "steps", "losses", "rewards"]:
+        files = [file for file in os.listdir(SAVEPATH) if file.startswith(name)]
+        if len(files) > 1:
+            raise Exception(f"more than one savefile found for {name}")
+        else:
+            loaded_vars.append(torch.load(os.path.join(SAVEPATH, files[0])))
+    return(loaded_vars)
 
 if __name__ == "__main__":
     #create global network and pipeline
@@ -225,13 +255,15 @@ if __name__ == "__main__":
     #create workers
     losses = []
     steps = []
+    rewards = []
     trajectories = []
     workers = [Worker(g_net, i) for i in range(N_W)]
 
     [w.pull_params() for w in workers] #make workers identical copies of global network before training begins
     for i_step in range(N_STEP): #performing one parallel update step
         #parallel trajectory sampling
-        trajectories = [w.start() for w in workers] #list comprehension automatically waits for workers to finish
+        episodes = [w.start() for w in workers] #list comprehension automatically waits for workers to finish
+        trajectories, cum_rewards = zip(*episodes)
         #concatenate and push tracjectories to global network for learning (synchronized update)
         loss = update_step(g_net, trajectories, optimizer, i_step)
         #pull new parameters
@@ -240,8 +272,11 @@ if __name__ == "__main__":
         g_step += sum([len(traj[0])for traj in trajectories])
         steps.append(g_step)
         losses.append(loss.item())
+        rewards.append(sum(cum_rewards)/N_ACT)
+        print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: iteration {i_step}, total steps {g_step}, "
+              f"total loss {loss.item()}, avg. reward {sum(cum_rewards)}.")
         if i_step%1 == 0: #save global network
-            save_step(i_step, g_net, steps, losses)
+            save_step(i_step, g_net, steps, losses, rewards)
 
     if config["plot"]:
         import matplotlib.pyplot as plt
