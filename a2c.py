@@ -142,10 +142,10 @@ class Worker(mp.Process):
         # every element in r_disc now contains reward at corresponding step plus future discounted rewards
 
         #cast everything to tensors (states are already cast)
-        s_ = torch.cat(s_)
-        a_ = torch.tensor(a_, dtype=torch.uint8, device=self.device) #torch can only compute gradients for float
+        s_ = torch.cat(s_).to(device=g_device)
+        a_ = torch.tensor(a_, dtype=torch.uint8, device=g_device) #torch can only compute gradients for float
         # tensors, but this shouldn't be a problem
-        r_disc = torch.tensor(r_disc, dtype=torch.float16, device=self.device)
+        r_disc = torch.tensor(r_disc, dtype=torch.float16, device=g_device)
 
         return(s_,a_,r_disc)
 

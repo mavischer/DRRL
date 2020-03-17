@@ -95,7 +95,7 @@ class DRRLnet(nn.Module):
         xmap = torch.tensor(np.expand_dims(np.expand_dims(xmap,0),0), dtype=torch.float32, requires_grad=False)
         ymap = np.linspace(-np.ones(conv2w), np.ones(conv2w), num=conv2h, endpoint=True, axis=1)
         ymap = torch.tensor(np.expand_dims(np.expand_dims(ymap,0),0), dtype=torch.float32, requires_grad=False)
-        self.xymap = torch.cat((xmap,ymap),dim=1) # shape (1, 2, conv2w, conv2h)
+        self.register_buffer("xymap", torch.cat((xmap,ymap),dim=1)) # shape (1, 2, conv2w, conv2h)
 
         #create attention module with n_heads heads and remember how many times to stack it
         self.n_att_stack = n_att_stack #how many times the attentional module is to be stacked (weight-sharing -> reuse)
