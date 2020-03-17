@@ -75,7 +75,7 @@ class Worker(mp.Process):
                 verbose:whether to print results of current game (better disable for large number of workers)
         """
         super(Worker, self).__init__()
-        self.name = f"w{w_idx}"
+        self.name = f"w{w_idx:02}"
         self.g_net = gnet
         self.l_net = DRRLnet(INP_W, INP_H, N_ACT).to(device)  # local network
         self.l_net.train()  # sets net in training mode so gradient's don't clutter memory
@@ -167,17 +167,24 @@ def update_step(net, trajectories, opt, opt_step):
     b_s, b_a, b_r_disc = [torch.cat(elems) for elems in list(rezip)] #concatenate torch tensors of all trajectories
 
     b_p, b_v = net.forward(b_s)
-    # critic loss
+
     td = b_r_disc - b_v
-    c_loss = td.pow(2)
-    #actor loss
     m = torch.distributions.Categorical(b_p)
-    a_loss = - m.log_prob(b_a) * td.detach().squeeze()
-    #entropy term
-    e_loss = m.entropy()
     # e_w = min(1, 2*0.995**opt_step) #todo: check entropy annealing!
-    e_w = 0.005 #like in paper
-    total_loss = (0.5*c_loss + a_loss + e_w*e_loss).mean() #todo: Adam seems to be able to handle not meaning,
+    e_w = 0.005  # like in paper
+    total_loss = (0.5 * td.pow(2) + - m.log_prob(b_a) * td.detach().squeeze() + e_w * m.entropy()).mean()  # todo: Adam seems to be able to handle not meaning,
+
+    # # critic loss
+    # td = b_r_disc - b_v
+    # c_loss = td.pow(2)
+    # #actor loss
+    # m = torch.distributions.Categorical(b_p)
+    # a_loss = - m.log_prob(b_a) * td.detach().squeeze()
+    # #entropy term
+    # e_loss = m.entropy()
+    # # e_w = min(1, 2*0.995**opt_step) #todo: check entropy annealing!
+    # e_w = 0.005 #like in paper
+    # total_loss = (0.5*c_loss + a_loss + e_w*e_loss).mean() #todo: Adam seems to be able to handle not meaning,
     # RMSprop wants scalar losses: "RuntimeError: grad can be implicitly created only for scalar outputs"
     #global network: zero gradients, back-propagate loss, update params
     opt.zero_grad()
@@ -268,13 +275,18 @@ if __name__ == "__main__":
         loss = update_step(g_net, trajectories, optimizer, i_step)
         #pull new parameters
         [w.pull_params() for w in workers]
-        #bookkeeping
+        #trying to free some gpu memory...
+        if g_device == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+    #bookkeeping
         g_step += sum([len(traj[0])for traj in trajectories])
         steps.append(g_step)
         losses.append(loss.item())
         rewards.append(sum(cum_rewards)/N_ACT)
         print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: iteration {i_step}, total steps {g_step}, "
-              f"total loss {loss.item()}, avg. reward {sum(cum_rewards)}.")
+              f"total loss {loss.item()}, avg. reward {rewards[-1]}.")
         if i_step%1 == 0: #save global network
             save_step(i_step, g_net, steps, losses, rewards)
 
