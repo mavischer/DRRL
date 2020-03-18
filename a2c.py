@@ -165,8 +165,11 @@ def update_step(net, trajectories, opt, opt_step):
     """
     rezip = zip(*trajectories)
     b_s, b_a, b_r_disc = [torch.cat(elems) for elems in list(rezip)] #concatenate torch tensors of all trajectories
-
-    b_p, b_v = net.forward(b_s)
+    try:
+        b_p, b_v = net.forward(b_s)
+    except RuntimeError:
+        print(f"failed to handle batch of size {b_s.shape}")
+        raise
 
     td = b_r_disc - b_v
     m = torch.distributions.Categorical(b_p)
@@ -276,11 +279,10 @@ if __name__ == "__main__":
         #pull new parameters
         [w.pull_params() for w in workers]
         #trying to free some gpu memory...
-        if g_device == "cuda":
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-
-    #bookkeeping
+#        if g_device.type == "cuda":
+#            torch.cuda.empty_cache()
+#            torch.cuda.synchronize()
+        #bookkeeping
         g_step += sum([len(traj[0])for traj in trajectories])
         steps.append(g_step)
         losses.append(loss.item())
