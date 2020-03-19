@@ -142,10 +142,10 @@ class Worker(mp.Process):
         # every element in r_disc now contains reward at corresponding step plus future discounted rewards
 
         #cast everything to tensors (states are already cast)
-        s_ = torch.cat(s_).to(device=g_device)
-        a_ = torch.tensor(a_, dtype=torch.uint8, device=g_device) #torch can only compute gradients for float
+        s_ = torch.cat(s_).to(device=g_device).detach()
+        a_ = torch.tensor(a_, dtype=torch.uint8, device=g_device).detach() #torch can only compute gradients for float
         # tensors, but this shouldn't be a problem
-        r_disc = torch.tensor(r_disc, dtype=torch.float16, device=g_device)
+        r_disc = torch.tensor(r_disc, dtype=torch.float16, device=g_device).detach()
 
         return(s_,a_,r_disc)
 
@@ -173,23 +173,10 @@ def update_step(net, trajectories, opt, opt_step):
 
     td = b_r_disc - b_v
     m = torch.distributions.Categorical(b_p)
-    # e_w = min(1, 2*0.995**opt_step) #todo: check entropy annealing!
+    # e_w = min(1, 2*0.995**opt_step) #todo: try out entropy annealing!
     e_w = 0.005  # like in paper
-    total_loss = (0.5 * td.pow(2) + - m.log_prob(b_a) * td.detach().squeeze() + e_w * m.entropy()).mean()  # todo: Adam seems to be able to handle not meaning,
+    total_loss = (0.5 * td.pow(2) - m.log_prob(b_a) * td.detach().squeeze() + e_w * m.entropy()).mean()
 
-    # # critic loss
-    # td = b_r_disc - b_v
-    # c_loss = td.pow(2)
-    # #actor loss
-    # m = torch.distributions.Categorical(b_p)
-    # a_loss = - m.log_prob(b_a) * td.detach().squeeze()
-    # #entropy term
-    # e_loss = m.entropy()
-    # # e_w = min(1, 2*0.995**opt_step) #todo: check entropy annealing!
-    # e_w = 0.005 #like in paper
-    # total_loss = (0.5*c_loss + a_loss + e_w*e_loss).mean() #todo: Adam seems to be able to handle not meaning,
-    # RMSprop wants scalar losses: "RuntimeError: grad can be implicitly created only for scalar outputs"
-    #global network: zero gradients, back-propagate loss, update params
     opt.zero_grad()
     total_loss.backward()
     opt.step()
@@ -214,7 +201,8 @@ def save_step(i_step, g_net, steps, losses, rewards):
     try:
         # clean out old files
         oldfiles = [f for f in os.listdir(SAVEPATH)
-                    if (f.startswith("g_net") or f.startswith("steps") or f.startswith("losses"))
+                    if (f.startswith("g_net") or f.startswith("steps") or
+                        f.startswith("losses") or f.startswith("rewards"))
                     and not f.endswith(ending)]
         for f in oldfiles:
             os.remove(os.path.join(SAVEPATH, f))
@@ -248,19 +236,15 @@ if __name__ == "__main__":
     # optimizer = SharedAdam(g_net.parameters(), lr=0.0001)  # global optimizer
     if config["optimizer"] == "RMSprop":
         #RMSprop optimizer was used for the large state space, not the small ones and impala instead of a3c.
-        # "Learning rate was tuned between 1e-5 and 2e-4" means linearly decaying during training? ->
-        # torch.optim.lr_scheduler
-        #momentum 0, epsilon 0.1, decay term 0.99, is this called "alpha" in torch?
-        optimizer = torch.optim.RMSprop(g_net.parameters(), eps=0.1, lr=1e-4) #todo: ask Rob about whether to change
-        # the params
+        # "Learning rate was tuned between 1e-5 and 2e-4" probably means they did hyperparameter search.
+        # scheduling is also possible conveniently using torch torch.optim.lr_scheduler
+        # perhaps use smaller decay term 0.9
+        optimizer = torch.optim.RMSprop(g_net.parameters(), eps=0.1, lr=config["lr"])
     else:
         #Adam optimizer was used for the starcraft games with learning rate decaying linearly over 1e10 steps from
         # 1e-4 to 1e-5. other params are torch defaults
-        optimizer = torch.optim.Adam(g_net.parameters(),lr=1e-4)
-    g_step = 0 # mp.Value('i', 0) #global step counter
-    # g_ep = mp.Value('i', 0) #global episode counter
-    # g_ep_r = mp.Value('d', 0.) #global reward counter
-    # res_queue = mp.Queue() #queue to push trajectories to
+        optimizer = torch.optim.Adam(g_net.parameters(),lr=config["lr"])
+    g_step = 0
 
     #create workers
     losses = []
@@ -279,16 +263,17 @@ if __name__ == "__main__":
         #pull new parameters
         [w.pull_params() for w in workers]
         #trying to free some gpu memory...
-#        if g_device.type == "cuda":
-#            torch.cuda.empty_cache()
+        if g_device.type == "cuda": #these only release memory to be visible, should not make a substantial difference
+            torch.cuda.empty_cache()
 #            torch.cuda.synchronize()
         #bookkeeping
-        g_step += sum([len(traj[0])for traj in trajectories])
+        len_iter = sum([len(traj[0])for traj in trajectories])
+        g_step += len_iter
         steps.append(g_step)
         losses.append(loss.item())
-        rewards.append(sum(cum_rewards)/N_ACT)
-        print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: iteration {i_step}, total steps {g_step}, "
-              f"total loss {loss.item()}, avg. reward {rewards[-1]}.")
+        rewards.append(sum(cum_rewards)/N_W)
+        print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: it: {i_step}, steps:{len_iter}, "
+              f"cum. steps:{g_step}, total loss:{loss.item():.2f}, avg. reward:{rewards[-1]:.2f}.")
         if i_step%1 == 0: #save global network
             save_step(i_step, g_net, steps, losses, rewards)
 
