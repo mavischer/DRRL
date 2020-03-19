@@ -1,9 +1,5 @@
-"""Base version of advantage actor critic training of the DRRL architecture on a
-BoxWorld task. Can be used with local actor instances on CPUS and global learner instance on GPU.
-Make sure to have the gym-boxworld environment registered: https://github.com/mavischer/Box-World
-Script made with, among others, inspiration from https://github.com/MorvanZhou/pytorch-A3C/ and
-https://lilianweng.github.io/lil-log/2018/04/08/policy-gradient-algorithms.html.
-"""
+"""Version of a2c.py to calculate gradients in local worker instances and send them to gobal optimizer.  This way,
+no GPU is required at the cost of slightly longer steps."""
 import torch
 import torch.multiprocessing as mp
 import gym
@@ -12,7 +8,7 @@ from torch.distributions import Categorical
 import os
 import argparse
 import yaml
-import time
+from time import time
 
 #parse yaml config file from cmdline
 parser = argparse.ArgumentParser(description='PyTorch A2C BoxWorld Experiment')
@@ -67,7 +63,7 @@ GAMMA = config["gamma"]
 
 
 class Worker(mp.Process):
-    def __init__(self, gnet, w_idx, device=l_device, verbose=False):
+    def __init__(self, g_net, g_lock, w_idx, device=l_device, verbose=False):
         """
             Args:
                 gnet:   global network that performs parameter updates
@@ -77,20 +73,25 @@ class Worker(mp.Process):
         """
         super(Worker, self).__init__()
         self.name = f"w{w_idx:02}"
-        self.g_net = gnet
+        self.g_net = g_net
+        self.g_lock = g_lock
         self.l_net = DRRLnet(INP_W, INP_H, N_ACT).to(device)  # local network
-        self.l_net.eval() #otherwise gradients clutter memory
+        self.l_net.train()  # sets net in training mode so gradient's don't clutter memory
         print(f"{self.name}: running local net on {l_device}")
         self.env = gym.make('gym_boxworld:boxworld-v0', **ENV_CONFIG)
         self.device = device
         self.verbose = verbose
 
     def start(self):
-        """Runs an entire episode, in the end return trajectory as list of s,a,r.
+        """Runs an entire episode, calculates gradients for all weights
 
         Returns:
-            Ready-to-digest trajectory as torch.tensors of state, action, reward+discounted future rewards
+            loss and accumulated returns (not discounted) of sampled episode. the gradients are written directly to
+            the central learner's parameters grads
         """
+        ### sampling trajectory
+        t0 = time()
+        self.l_net.eval()
         s = self.env.reset()
         s_, a_, r_ = [], [], [] #trajectory of episode goes here
         ep_r = 0. #total episode reward
@@ -112,9 +113,49 @@ class Worker(mp.Process):
             if done:  # return trajectory as lists of elements
                 if self.verbose:
                     print(f"{self.name}: episode ended after step {ep_t} with total reward {ep_r}")
-                return(self.prettify_trajectory(s_, a_, r_), ep_r)
+                break
             s = s_new
             ep_t += 1
+
+        print(f"{self.name:} trajectory complete")
+        ### forward and backward pass of entire episode
+        # preprocess trajectory
+        self.l_net.zero_grad()
+        self.l_net.train()
+
+        s_,a_,r_disc = self.prettify_trajectory(s_,a_,r_)
+        t1 = time()
+        print(f"{self.name:} trajectory complete ({t1-t0:.2f}s)")
+        t2 = time()
+        p_, v_ = self.l_net.forward(s_)
+        print(f"{self.name:} forward pass complete ({t2-t1:.2f}s)")
+
+        #backward pass to calculate gradients
+        t3 = time()
+        loss = self.a2c_loss(s_,a_,r_disc,p_, v_)
+        print(f"{self.name:} loss computed ({t3-t2:.2f}s)")
+        t4 = time()
+        loss.backward()
+        print(f"{self.name:} backward pass complete ({t4-t3:.2f}s)")
+
+        ### shipping out gradients to centralized learner
+        #acquire lock on global net, needed because += is not atomic
+        self.g_lock.acquire()
+
+        t5 = time()
+        print(f"{self.name:} lock acquired ({t5-t4:.2f}s)")
+        for lp, gp in zip(self.l_net.parameters(), self.g_net.parameters()):
+            try:
+                gp.grad += lp.grad #apparently in older torch versions, .grad was read-only, so you see ._grad for write
+            except TypeError as e: #the very first time these gradients are touched, they are None, afterwards zero
+                gp.grad = lp.grad
+        t6 = time()
+        print(f"{self.name:} gradients written ({t6-t5:.2f}s)")
+        t7 = time()
+        self.g_lock.release()
+        print(f"{self.name:} lock released ({t7-t6:.2f}s)")
+
+        return(loss.item(), ep_r)
 
     def prettify_trajectory(self, s_, a_, r_):
         """Prepares trajectory to be sent to central learner in a more orderly fashion.
@@ -149,38 +190,30 @@ class Worker(mp.Process):
 
         return(s_,a_,r_disc)
 
+    def a2c_loss(self, s_,a_,r_disc,p_, v_):
+        """Calculate advantage-actor-critic loss on entire episode
+        Args:
+            for the entire trajectory, one tensor each of
+            s_: states
+            a_: actions
+            r_disc: temporally discounted future rewards
+            p_: action probabilities
+            v_: value estimates
+
+        Returns: Summed of losses of trajectory
+        """
+        td = r_disc - v_
+        m = torch.distributions.Categorical(p_)
+        # e_w = min(1, 2*0.995**opt_step) #todo: try out entropy annealing!
+        e_w = 0.005  # like in paper
+        total_loss = (0.5 * td.pow(2) - m.log_prob(a_) * td.detach().squeeze() + e_w * m.entropy()).mean()
+
+        return total_loss.sum()
+
     def pull_params(self):
         """Update own params from global network."""
         self.l_net.load_state_dict(self.g_net.state_dict(), strict=True)
 
-def update_step(net, trajectories, opt, opt_step):
-    """Calculate advantage-actor-critic loss on batch with network, updates parameters
-    Args:
-        net: network to perform training on
-        batch: list of trajectories as tuple of 1 tensor object for each
-            b_s:    states
-            b_a:    chosen actions
-            b_r_disc: returns and discounted future rewards for TD error with value function
-    Returns: Sum of loss of all trajectories
-    """
-    rezip = zip(*trajectories)
-    b_s, b_a, b_r_disc = [torch.cat(elems) for elems in list(rezip)] #concatenate torch tensors of all trajectories
-    try:
-        b_p, b_v = net.forward(b_s)
-    except RuntimeError:
-        print(f"failed to handle batch of size {b_s.shape}")
-        raise
-
-    td = b_r_disc - b_v
-    m = torch.distributions.Categorical(b_p)
-    # e_w = min(1, 2*0.995**opt_step) #todo: try out entropy annealing!
-    e_w = 0.005  # like in paper
-    total_loss = (0.5 * td.pow(2) - m.log_prob(b_a) * td.detach().squeeze() + e_w * m.entropy()).mean()
-
-    opt.zero_grad()
-    total_loss.backward()
-    opt.step()
-    return total_loss.sum()
 
 def save_step(i_step, g_net, steps, losses, rewards):
     """Saves statistics to global var SAVEPATH and cleans up outdated save files
@@ -231,9 +264,10 @@ def load_step():
 if __name__ == "__main__":
     #create global network and pipeline
     g_net = DRRLnet(INP_W, INP_H, N_ACT).to(g_device) # global network
-    #todo: only implicit init so far
+    g_net.zero_grad()
+
     g_net.share_memory()  # share the global parameters in multiprocessing #todo: check whether this makes a difference
-    # optimizer = SharedAdam(g_net.parameters(), lr=0.0001)  # global optimizer
+    g_lock = mp.Lock()
     if config["optimizer"] == "RMSprop":
         #RMSprop optimizer was used for the large state space, not the small ones and impala instead of a3c.
         # "Learning rate was tuned between 1e-5 and 2e-4" probably means they did hyperparameter search.
@@ -251,15 +285,16 @@ if __name__ == "__main__":
     steps = []
     rewards = []
     trajectories = []
-    workers = [Worker(g_net, i) for i in range(N_W)]
+    workers = [Worker(g_net, g_lock, i) for i in range(N_W)]
 
     [w.pull_params() for w in workers] #make workers identical copies of global network before training begins
     for i_step in range(N_STEP): #performing one parallel update step
-        #parallel trajectory sampling
-        episodes = [w.start() for w in workers] #list comprehension automatically waits for workers to finish
-        trajectories, cum_rewards = zip(*episodes)
-        #concatenate and push tracjectories to global network for learning (synchronized update)
-        loss = update_step(g_net, trajectories, optimizer, i_step)
+        # optimizer.zero_grad()
+        #parallel trajectory sampling and gradient computation
+        episodes = [w.start() for w in workers] #workers will write the gradients to the parameters
+        ep_losses, cum_rewards = zip(*episodes)
+        #perform optimizer step on global network
+        optimizer.step()  # centralized optimizer updates global network
         #pull new parameters
         [w.pull_params() for w in workers]
         #trying to free some gpu memory...
@@ -270,10 +305,10 @@ if __name__ == "__main__":
         len_iter = sum([len(traj[0])for traj in trajectories])
         g_step += len_iter
         steps.append(g_step)
-        losses.append(loss.item())
+        losses.append(sum(ep_losses))
         rewards.append(sum(cum_rewards)/N_W)
-        print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: it: {i_step}, steps:{len_iter}, "
-              f"cum. steps:{g_step}, total loss:{loss.item():.2f}, avg. reward:{rewards[-1]:.2f}.")
+        # print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: it: {i_step}, steps:{len_iter}, "
+        #       f"cum. steps:{g_step}, total loss:{losses[-1]:.2f}, avg. reward:{rewards[-1]:.2f}.")
         if i_step%1 == 0: #save global network
             save_step(i_step, g_net, steps, losses, rewards)
 
