@@ -27,7 +27,9 @@ ENV_CONFIG = config["env_config"]
 if config["n_cpus"] == -1:
     config["n_cpus"] = mp.cpu_count()
 N_W = config["n_cpus"]
-g_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# g_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+g_device = torch.device("cpu") #gpu doesn't make sense here because all it does is basically run optimizer on
+# received gradients
 print(f"running global net on {g_device}")
 l_device = torch.device("cpu")
 with open(os.path.join(SAVEPATH, "config.yml"), "w+") as f:
@@ -86,11 +88,10 @@ class Worker(mp.Process):
         """Runs an entire episode, calculates gradients for all weights
 
         Returns:
-            loss and accumulated returns (not discounted) of sampled episode. the gradients are written directly to
-            the central learner's parameters grads
+            loss, accumulated returns (not discounted) and number of environment steps of sampled episode.
+            the gradients are written directly to the central learner's parameters grads.
         """
         ### sampling trajectory
-        t0 = time()
         self.l_net.eval()
         s = self.env.reset()
         s_, a_, r_ = [], [], [] #trajectory of episode goes here
@@ -117,48 +118,34 @@ class Worker(mp.Process):
             s = s_new
             ep_t += 1
 
-        print(f"{self.name:} trajectory complete")
         ### forward and backward pass of entire episode
         # preprocess trajectory
         self.l_net.zero_grad()
         self.l_net.train()
 
         s_,a_,r_disc = self.prettify_trajectory(s_,a_,r_)
-        t1 = time()
-        print(f"{self.name:} trajectory complete ({t1-t0:.2f}s)")
-        t2 = time()
         p_, v_ = self.l_net.forward(s_)
-        print(f"{self.name:} forward pass complete ({t2-t1:.2f}s)")
 
         #backward pass to calculate gradients
-        t3 = time()
         loss = self.a2c_loss(s_,a_,r_disc,p_, v_)
-        print(f"{self.name:} loss computed ({t3-t2:.2f}s)")
-        t4 = time()
         loss.backward()
-        print(f"{self.name:} backward pass complete ({t4-t3:.2f}s)")
 
         ### shipping out gradients to centralized learner
-        #acquire lock on global net, needed because += is not atomic
-        self.g_lock.acquire()
-
-        t5 = time()
-        print(f"{self.name:} lock acquired ({t5-t4:.2f}s)")
+        #idealiter: acquire lock on global net because += is not atomic
+        #realiter: acquiring lock takes 1-2 seconds which is completely out of proportion -> fuck it, because updates
+        # are somewhat stochastic due to trajectory sampling anyway (idea behind Hogwild asynchronous updates)
+        # self.g_lock.acquire()
         for lp, gp in zip(self.l_net.parameters(), self.g_net.parameters()):
             try:
                 gp.grad += lp.grad #apparently in older torch versions, .grad was read-only, so you see ._grad for write
             except TypeError as e: #the very first time these gradients are touched, they are None, afterwards zero
                 gp.grad = lp.grad
-        t6 = time()
-        print(f"{self.name:} gradients written ({t6-t5:.2f}s)")
-        t7 = time()
-        self.g_lock.release()
-        print(f"{self.name:} lock released ({t7-t6:.2f}s)")
+        # self.g_lock.release()
 
-        return(loss.item(), ep_r)
+        return(loss.item(), ep_r, ep_t+1)
 
     def prettify_trajectory(self, s_, a_, r_):
-        """Prepares trajectory to be sent to central learner in a more orderly fashion.
+        """Prepares trajectory to compute loss on, just to make the code clearer
 
         Calculate temporally discounted future rewards for TD error and reverse lists so everything is in correct
         temporal order. Cast everything to appropriate tensorflow tensors. Return what's necessary to compute
@@ -171,7 +158,6 @@ class Worker(mp.Process):
 
         Returns:
             Ready-to-digest trajectory as torch.tensors of state, action, reward+discounted future rewards
-
         """
         # calculate temporal-discounted rewards
         r_acc = 0
@@ -200,7 +186,7 @@ class Worker(mp.Process):
             p_: action probabilities
             v_: value estimates
 
-        Returns: Summed of losses of trajectory
+        Returns: Summed losses of trajectory
         """
         td = r_disc - v_
         m = torch.distributions.Categorical(p_)
@@ -263,6 +249,7 @@ def load_step():
 
 if __name__ == "__main__":
     #create global network and pipeline
+    t0 = time()
     g_net = DRRLnet(INP_W, INP_H, N_ACT).to(g_device) # global network
     g_net.zero_grad()
 
@@ -278,7 +265,6 @@ if __name__ == "__main__":
         #Adam optimizer was used for the starcraft games with learning rate decaying linearly over 1e10 steps from
         # 1e-4 to 1e-5. other params are torch defaults
         optimizer = torch.optim.Adam(g_net.parameters(),lr=config["lr"])
-    g_step = 0
 
     #create workers
     losses = []
@@ -288,29 +274,41 @@ if __name__ == "__main__":
     workers = [Worker(g_net, g_lock, i) for i in range(N_W)]
 
     [w.pull_params() for w in workers] #make workers identical copies of global network before training begins
+    t1 = time()
+    print(f"setup took {t1-t0:.2f}s")
     for i_step in range(N_STEP): #performing one parallel update step
         # optimizer.zero_grad()
         #parallel trajectory sampling and gradient computation
+        t0 = time()
         episodes = [w.start() for w in workers] #workers will write the gradients to the parameters
-        ep_losses, cum_rewards = zip(*episodes)
+        t1 = time()
+        ep_losses, cum_rewards, ep_steps = zip(*episodes)
+        print(f"trajectories, calc. and writing gradient took {t1-t0:.2f}s")
         #perform optimizer step on global network
         optimizer.step()  # centralized optimizer updates global network
+        t2 = time()
+        print(f"optimizer step took {t2-t1}s")
         #pull new parameters
         [w.pull_params() for w in workers]
-        #trying to free some gpu memory...
-        if g_device.type == "cuda": #these only release memory to be visible, should not make a substantial difference
-            torch.cuda.empty_cache()
+        t3 = time()
+        print(f"pulling parameters took {t3-t2}s")
+
+        # #trying to free some gpu memory...
+        # if g_device.type == "cuda": #these only release memory to be visible, should not make a substantial difference
+        #     torch.cuda.empty_cache()
 #            torch.cuda.synchronize()
         #bookkeeping
-        len_iter = sum([len(traj[0])for traj in trajectories])
-        g_step += len_iter
-        steps.append(g_step)
+        total_steps = sum(ep_steps)
+        steps.append(total_steps)
         losses.append(sum(ep_losses))
         rewards.append(sum(cum_rewards)/N_W)
-        # print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: it: {i_step}, steps:{len_iter}, "
-        #       f"cum. steps:{g_step}, total loss:{losses[-1]:.2f}, avg. reward:{rewards[-1]:.2f}.")
+        # print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: it: {i_step}, steps:{sum(ep_steps)}, "
+        #       f"cum. steps:{total_steps}, total loss:{losses[-1]:.2f}, avg. reward:{rewards[-1]:.2f}.")
         if i_step%1 == 0: #save global network
             save_step(i_step, g_net, steps, losses, rewards)
+        t4 = time()
+        print(f"bookkeeping took {t4-t3}s")
+        print(f"entire episode took {t4-t0}s")
 
     if config["plot"]:
         import matplotlib.pyplot as plt
