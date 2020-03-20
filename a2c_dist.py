@@ -26,7 +26,7 @@ if not os.path.isdir(SAVEPATH):
 torch.manual_seed(config["seed"])
 ENV_CONFIG = config["env_config"]
 if config["n_cpus"] == -1:
-    config["n_cpus"] = mp.cpu_count()
+    config["n_cpus"] = mp.cpu_count() -1
 N_W = config["n_cpus"]
 # g_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 g_device = torch.device("cpu") #gpu doesn't make sense here because all it does is basically run optimizer on
@@ -98,7 +98,7 @@ class Worker(mp.Process):
         ### sampling trajectory
         while start_cond.wait(1000): #wait for background process to signal start of an episode (if timeout reached
             # wait returns false and run is aborted
-            print(f"{self.name}: starting iteration")
+            # print(f"{self.name}: starting iteration")
             t_start = time.time()
             self.pull_params()
             self.l_net.eval()
@@ -126,7 +126,8 @@ class Worker(mp.Process):
                     break
                 s = s_new
                 ep_t += 1
-
+            t_sample = time.time()
+            print(f"{self.name}: sampling took {t_sample-t_start:.2f}s")
             ### forward and backward pass of entire episode
             # preprocess trajectory
             self.l_net.zero_grad()
@@ -138,20 +139,23 @@ class Worker(mp.Process):
             #backward pass to calculate gradients
             loss = self.a2c_loss(s_,a_,r_disc,p_, v_)
             loss.backward()
+            t_grads = time.time()
+            print(f"{self.name}: calculating gradients took {t_grads-t_sample:.2f}s")
 
             ### shipping out gradients to centralized learner as named dict
             grads = []
             for name, param in self.l_net.named_parameters():
                 grads.append((name, param.grad))
             grad_dict = dict(grads)
-
             t_end = time.time()
+
             self.stats_q.put({"cummulative reward": ep_r,
                               "loss": loss.item(),
                               "success": (r==self.env.reward_gem),
                               "steps": ep_t + 1,
                               "walltime": t_end-t_start})
             self.grads_q.put(grad_dict)
+            print(f"{self.name}: distributing gradients took {t_end-t_grads:.2f}s")
             print(f"{self.name}: episode took {t_end-t_start}s")
 
     def prettify_trajectory(self, s_, a_, r_):
