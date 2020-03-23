@@ -1,19 +1,24 @@
 seed:
    123
 n_cpus: #number of cpus used
-   20
+   10
 env_config:
    n: 8 #size of board
-   goal_length: 3 #length of correct path (e.g. 3 means goal can be unlocked with 3rd key)
-   num_distractor: 2 #number of distractor branches
-   distractor_length: 2 #length/"depth" of each distractor branch
+   goal_length: [2,3,4] #length of correct path (e.g. 4 means goal can be unlocked with 3rd key)
+   num_distractor: 1 #number of distractor branches
+   distractor_length: 1 #length/"depth" of each distractor branch
+   max_steps: 1000
+   step_cost: -0.05 #all rewards can be parameterized as well
+   reward_dead: -5
 gamma: #temporal discount factor
    0.99
 n_step: #number of a2c updates, i.e. number of episodes each worker samples
-   3
+   10
 optimizer:
-   RMSprop #or Adam
-tensorboard: #save global and local graphs to visualize with tensorboard
+   Adam #RMSprop #or Adam
+lr:
+   0.00001
+tensorboard:
    False
-plot: #plot losses against global steps with matplotlib
+plot:
    False

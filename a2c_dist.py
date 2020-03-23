@@ -10,6 +10,7 @@ import argparse
 import yaml
 import time
 import pandas as pd
+import random
 
 #parse yaml config file from cmdline
 parser = argparse.ArgumentParser(description='PyTorch A2C BoxWorld Experiment')
@@ -36,33 +37,29 @@ l_device = torch.device("cpu")
 with open(os.path.join(SAVEPATH, "config.yml"), "w+") as f:
     f.write(yaml.dump(config))
 
-#make environment
-env = gym.make('gym_boxworld:boxworld-v0', **ENV_CONFIG)
+def random_config(raw_config=ENV_CONFIG):
+    """Field in config can contain a list of values that a worker randomly chooses from when starting to generate a
+    trajectory, i.e. sampling solution paths of different depth or different number of distractor branches.
+
+    """
+    config = {}
+    for key, value in raw_config.items():
+        if type(value) == list:
+            config[key] = random.choice(value)
+        else:
+            config[key] = value
+    return config
+
+#obtain action and state space size
+env = gym.make('gym_boxworld:boxworld-v0', **random_config())
 N_ACT = env.action_space.n
 INP_W = env.observation_space.shape[0]
 INP_H = env.observation_space.shape[1]
+del env
 
 #configure learning
 N_STEP = config["n_step"]
 GAMMA = config["gamma"]
-
-# #todo: check whether we really need this?
-# class SharedAdam(torch.optim.Adam):
-#     """Shared optimizer, the parameters in the optimizer will be shared across multiprocessors."""
-#     def __init__(self, params, lr=1e-3, betas=(0.9, 0.9), eps=1e-8,
-#                  weight_decay=0):
-#         super(SharedAdam, self).__init__(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
-#         # State initialization
-#         for group in self.param_groups:
-#             for p in group['params']:
-#                 state = self.state[p]
-#                 state['step'] = 0
-#                 state['exp_avg'] = torch.zeros_like(p.data)
-#                 state['exp_avg_sq'] = torch.zeros_like(p.data)
-#
-#                 # share in memory
-#                 state['exp_avg'].share_memory_()
-#                 state['exp_avg_sq'].share_memory_()
 
 
 class Worker(mp.Process):
@@ -84,7 +81,6 @@ class Worker(mp.Process):
         self.l_net = DRRLnet(INP_W, INP_H, N_ACT).to(device)  # local network
         self.l_net.train()  # sets net in training mode so gradient's don't clutter memory
         print(f"{self.name}: running local net on {l_device}")
-        self.env = gym.make('gym_boxworld:boxworld-v0', **ENV_CONFIG)
         self.device = device
         self.verbose = verbose
 
@@ -95,14 +91,19 @@ class Worker(mp.Process):
         episode.
         Write to grads_queue the gradients are written directly to the central learner's parameters grads.
         """
+        ### generate random environment
+        env_config = random_config()
+        env = gym.make('gym_boxworld:boxworld-v0', **env_config)
+
         ### sampling trajectory
+
         while start_cond.wait(1000): #wait for background process to signal start of an episode (if timeout reached
             # wait returns false and run is aborted
             # print(f"{self.name}: starting iteration")
             t_start = time.time()
             self.pull_params()
             self.l_net.eval()
-            s = self.env.reset()
+            s = env.reset()
             s_, a_, r_ = [], [], [] #trajectory of episode goes here
             ep_r = 0. #total episode reward
             ep_t = 0  #episode step t, both just for oversight
@@ -112,7 +113,7 @@ class Worker(mp.Process):
                 p, _ = self.l_net(s)
                 m = Categorical(p) # create a categorical distribution over the list of probabilities of actions
                 a = m.sample().item() # and sample an action using the distribution
-                s_new, r, done, _ = self.env.step(a)
+                s_new, r, done, _ = env.step(a)
                 ep_r += r
 
                 # append current step's elements to lists
@@ -126,8 +127,8 @@ class Worker(mp.Process):
                     break
                 s = s_new
                 ep_t += 1
-            t_sample = time.time()
-            print(f"{self.name}: sampling took {t_sample-t_start:.2f}s")
+            # t_sample = time.time()
+            # print(f"{self.name}: sampling took {t_sample-t_start:.2f}s")
             ### forward and backward pass of entire episode
             # preprocess trajectory
             self.l_net.zero_grad()
@@ -139,8 +140,8 @@ class Worker(mp.Process):
             #backward pass to calculate gradients
             loss = self.a2c_loss(s_,a_,r_disc,p_, v_)
             loss.backward()
-            t_grads = time.time()
-            print(f"{self.name}: calculating gradients took {t_grads-t_sample:.2f}s")
+            # t_grads = time.time()
+            # print(f"{self.name}: calculating gradients took {t_grads-t_sample:.2f}s")
 
             ### shipping out gradients to centralized learner as named dict
             grads = []
@@ -149,14 +150,15 @@ class Worker(mp.Process):
             grad_dict = dict(grads)
             t_end = time.time()
 
-            self.stats_q.put({"cummulative reward": ep_r,
+            self.stats_q.put({**{"cumulative reward": ep_r,
                               "loss": loss.item(),
-                              "success": (r==self.env.reward_gem),
+                              "success": (r==env.reward_gem),
                               "steps": ep_t + 1,
-                              "walltime": t_end-t_start})
+                              "walltime": t_end-t_start},
+                             **env_config})
             self.grads_q.put(grad_dict)
-            print(f"{self.name}: distributing gradients took {t_end-t_grads:.2f}s")
-            print(f"{self.name}: episode took {t_end-t_start}s")
+            # print(f"{self.name}: distributing gradients took {t_end-t_grads:.2f}s")
+            # print(f"{self.name}: episode took {t_end-t_start}s")
 
     def prettify_trajectory(self, s_, a_, r_):
         """Prepares trajectory to compute loss on, just to make the code clearer
@@ -224,11 +226,11 @@ def save_step(i_step, g_net, stats):
     """
     try:
         ending = f"{i_step:05}"
-        torch.save(g_net.state_dict(), os.path.join(SAVEPATH, "net"+ending))
-        pd.DataFrame(stats).to_csv(os.path.join(SAVEPATH, "stats"+ending))
+        torch.save(g_net.state_dict(), os.path.join(SAVEPATH, "net."+ending))
+        pd.DataFrame(stats).to_csv(os.path.join(SAVEPATH, "stats."+ending))
         #remove old files
         oldfiles = [f for f in os.listdir(SAVEPATH)
-                    if (f.startswith("g_net") or f.startswith("stats"))
+                    if (f.startswith("net") or f.startswith("stats"))
                     and not f.endswith(ending)]
         for f in oldfiles:
             os.remove(os.path.join(SAVEPATH, f))
@@ -255,7 +257,7 @@ def load_step():
     return(loaded_vars)
 
 if __name__ == "__main__":
-    # mp.set_start_method("fork") #fork is unix default and means child process inherits all resources from parent
+    mp.set_start_method("fork") #fork is unix default and means child process inherits all resources from parent
     # process. in case problems occur, might use "forkserver"
     #create global network and pipeline
     g_net = DRRLnet(INP_W, INP_H, N_ACT).to(g_device) # global network
@@ -324,7 +326,7 @@ if __name__ == "__main__":
         import matplotlib.pyplot as plt
         import seaborn as sns
         data = pd.DataFrame(stats)
-        for i,measure in enumerate(["cummulative reward", "loss", "steps"]):
+        for i,measure in enumerate(["cumulative reward", "loss", "steps"]):
             plt.figure()
             sns.lineplot(x="global ep",y=measure,data=data)
 

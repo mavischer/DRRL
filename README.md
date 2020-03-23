@@ -10,6 +10,8 @@ Training is performed in `a2c.py`, the relational module and general architectur
 An example YAML config file parsed from the arguments is `exmpl_config.yml`. Both environment and network can be parameterized there.
 A suitable environment can be created e.g. by  `conda env create -f environment.yml` or 
  `pip install -r requirements.txt`. Afterwards install and register the [Box-World environment](https://github.com/mavischer/Box-World) by cloning the repo and `pip install -e gym-boxworld`.
+*Remember that after changing the code you need to re-register the environment before the changes become effective.*
+You can find the details of state space, action space and reward structure there.
 
 The network's graph can be visualized using tensorboard.
 
