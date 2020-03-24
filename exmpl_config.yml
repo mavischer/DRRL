@@ -1,19 +1,25 @@
+#THIS CONFIG FILE CONTAINS A SUBSET OF PARAMETERIZABLE VARIABLES, and unlike full_config.yml not all of them in their
+#default value, This is to give an impression of what will be parameterized in a usual run.
 seed:
    123
 n_cpus: #number of cpus used
-   10
+   2
 env_config:
    n: 8 #size of board
    goal_length: [2,3,4] #length of correct path (e.g. 4 means goal can be unlocked with 3rd key)
-   num_distractor: 1 #number of distractor branches
-   distractor_length: 1 #length/"depth" of each distractor branch
+   num_distractor: 1 #number of distractor branches, can be list
+   distractor_length: 1 #length/"depth" of each distractor branch, can be list
    max_steps: 1000
-   step_cost: -0.05 #all rewards can be parameterized as well
-   reward_dead: -5
+net_config:
+   att_emb_size: 32
+   n_heads: 2
+   n_att_stack: 2
+   n_fc_layers: 2
+   pad: True #padding will maintain size of state space
 gamma: #temporal discount factor
    0.99
 n_step: #number of a2c updates, i.e. number of episodes each worker samples
-   10
+   3
 optimizer:
    Adam #RMSprop #or Adam
 lr:

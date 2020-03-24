@@ -26,6 +26,8 @@ if not os.path.isdir(SAVEPATH):
     os.mkdir(SAVEPATH)
 torch.manual_seed(config["seed"])
 ENV_CONFIG = config["env_config"]
+NET_CONFIG = config["net_config"]
+
 if config["n_cpus"] == -1:
     config["n_cpus"] = mp.cpu_count() -1
 N_W = config["n_cpus"]
@@ -78,7 +80,7 @@ class Worker(mp.Process):
         self.g_net = g_net
         self.stats_q = stats_q
         self.grads_q = grads_q
-        self.l_net = DRRLnet(INP_W, INP_H, N_ACT).to(device)  # local network
+        self.l_net = DRRLnet(INP_W, INP_H, N_ACT, **NET_CONFIG).to(device)  # local network
         self.l_net.train()  # sets net in training mode so gradient's don't clutter memory
         print(f"{self.name}: running local net on {l_device}")
         self.device = device

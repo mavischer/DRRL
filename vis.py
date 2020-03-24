@@ -28,7 +28,8 @@ def aggregate_df(df):
     df["cumulative steps"] = np.cumsum(df["steps", "mean"])*n_workers
     return df
 
-data = pd.read_csv(paths_from_savedir("saves/run_test")[1]).drop(columns=["Unnamed: 0"])
+data1 = pd.read_csv(paths_from_savedir("saves/1e4_newR")[1]).drop(columns=["Unnamed: 0"])
+data2 = pd.read_csv(paths_from_savedir("saves/w19")[1]).drop(columns=["Unnamed: 0"])
 
 data = append_cumsteps(data)
 #

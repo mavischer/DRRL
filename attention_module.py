@@ -6,6 +6,7 @@ import numpy as np
 import math
 import torch.optim
 import torch.autograd
+from collections import OrderedDict
 
 class AttentionHead(nn.Module):
 
@@ -57,7 +58,7 @@ class AttentionModule(nn.Module):
 
 class DRRLnet(nn.Module):
 
-    def __init__(self, h, w, outputs, att_emb_size=64, n_heads=2, n_att_stack=2, pad=True):
+    def __init__(self, h, w, outputs, att_emb_size=64, n_heads=2, n_att_stack=2, n_fc_layers=4, pad=True):
 
         #internal action replay buffer for simple training algorithms
         self.saved_actions = []
@@ -107,11 +108,15 @@ class DRRLnet(nn.Module):
         # self.maxpool = nn.MaxPool1d(kernel_size=att_emb_size,return_indices=False) #don't know why maxpool reduces
         # kernel_size by 1
 
-        # 4 FC256 layers
-        self.fc1 = nn.Linear(att_elem_size, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, 256)
-        self.fc4 = nn.Linear(256, 256)
+        # FC256 layers, 4 is default
+        if n_fc_layers < 1:
+            raise ValueError("At least 1 linear readout layer is required.")
+        fc_dict = OrderedDict([('fc1', nn.Linear(att_elem_size, 256)),
+                               ('relu1', nn.ReLU())]) #first one has different inpuz size
+        for i in range(n_fc_layers-1):
+            fc_dict[f"fc{i+2}"] = nn.Linear(256, 256)
+            fc_dict[f"relu{i+2}"] = nn.ReLU()
+        self.fc_seq = nn.Sequential(fc_dict) #sequential container from ordered dict
         self.logits = nn.Linear(256, outputs)
         self.value = nn.Linear(256, 1)
 
@@ -148,10 +153,7 @@ class DRRLnet(nn.Module):
             kernelsize = kernelsize.item()
         pooled = F.max_pool1d(a.transpose(1,2), kernel_size=kernelsize) #pool out entity dimension
         #policy module: 4xFC256, then project to logits and value
-        p = F.relu(self.fc1(pooled.view(pooled.size(0),pooled.size(1))))
-        p = F.relu(self.fc2(p))
-        p = F.relu(self.fc3(p))
-        p = F.relu(self.fc4(p))
+        p = self.fc_seq(pooled.view(pooled.size(0),pooled.size(1)))
         pi = F.softmax(self.logits(p), dim=1)
         v = self.value(p) #todo: no normalization?
         return pi, v
