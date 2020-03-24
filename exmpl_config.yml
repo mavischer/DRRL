@@ -9,6 +9,7 @@ env_config:
    goal_length: [2,3,4] #length of correct path (e.g. 4 means goal can be unlocked with 3rd key)
    num_distractor: 1 #number of distractor branches, can be list
    distractor_length: 1 #length/"depth" of each distractor branch, can be list
+   num_colors: 8
    max_steps: 1000
 net_config:
    att_emb_size: 32

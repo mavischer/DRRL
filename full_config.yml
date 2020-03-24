@@ -15,6 +15,7 @@ env_config:
    reward_dead: 0
    reward_correct_key: 1
    reward_wrong_key: -1,
+   num_colors: 20
    max_steps: 3000 #maximum number of steps before environment terminates
    verbose: False
 net_config:

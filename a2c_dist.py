@@ -262,7 +262,7 @@ if __name__ == "__main__":
     mp.set_start_method("fork") #fork is unix default and means child process inherits all resources from parent
     # process. in case problems occur, might use "forkserver"
     #create global network and pipeline
-    g_net = DRRLnet(INP_W, INP_H, N_ACT).to(g_device) # global network
+    g_net = DRRLnet(INP_W, INP_H, N_ACT, **NET_CONFIG).to(g_device) # global network
     g_net.zero_grad()
     g_net.share_memory()  # share the global parameters in multiprocessing #todo: check whether this makes a difference
     stats_queue = mp.SimpleQueue() #statistics about the episodes will be returned in this queue
