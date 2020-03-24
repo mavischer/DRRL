@@ -249,14 +249,18 @@ def load_step():
             losses: global loss of episodes
             rewards: average rewards of episodes
     """
-    loaded_vars = []
-    for name in ["g_net", "steps", "losses", "rewards"]:
-        files = [file for file in os.listdir(SAVEPATH) if file.startswith(name)]
-        if len(files) > 1:
-            raise Exception(f"more than one savefile found for {name}")
-        else:
-            loaded_vars.append(torch.load(os.path.join(SAVEPATH, files[0])))
-    return(loaded_vars)
+    files = os.listdir(SAVEPATH)
+    statsfiles = [f for f in files if f.startswith("stats")]
+    netfiles = [f for f in files if f.startswith("net")]
+    if len(statsfiles) > 1 or len(netfiles) > 1:
+        raise Exception(f"more than one savefile found for in folder {SAVEPATH}")
+
+    i_step = int(statsfiles[0].split(".")[1])
+    state_dict = torch.load(os.path.join(SAVEPATH, netfiles[0]))
+    df = pd.read_csv(os.path.join(SAVEPATH, statsfiles[0])).drop(columns=["Unnamed: 0"])
+    #retranslate df to stats
+    stats = df.to_dict(orient="records")
+    return(i_step, state_dict, stats)
 
 if __name__ == "__main__":
     mp.set_start_method("fork") #fork is unix default and means child process inherits all resources from parent
