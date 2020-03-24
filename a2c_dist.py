@@ -21,9 +21,6 @@ with open(os.path.abspath(args.configpath), 'r') as file:
         config = yaml.safe_load(file)
 SAVEPATH = args.savepath
 
-#set stage
-if not os.path.isdir(SAVEPATH):
-    os.mkdir(SAVEPATH)
 torch.manual_seed(config["seed"])
 ENV_CONFIG = config["env_config"]
 NET_CONFIG = config["net_config"]
@@ -36,8 +33,6 @@ g_device = torch.device("cpu") #gpu doesn't make sense here because all it does 
 # received gradients
 print(f"running global net on {g_device}")
 l_device = torch.device("cpu")
-with open(os.path.join(SAVEPATH, "config.yml"), "w+") as f:
-    f.write(yaml.dump(config))
 
 def random_config(raw_config=ENV_CONFIG):
     """Field in config can contain a list of values that a worker randomly chooses from when starting to generate a
@@ -284,13 +279,31 @@ if __name__ == "__main__":
         # 1e-4 to 1e-5. other params are torch defaults
         optimizer = torch.optim.Adam(g_net.parameters(),lr=config["lr"])
 
+    # set stage
+    if not os.path.isdir(SAVEPATH): #directory does not exist or is empty
+        os.mkdir(SAVEPATH)
+        #write config to new directory
+        with open(os.path.join(SAVEPATH, "config.yml"), "w+") as f:
+            f.write(yaml.dump(config))
+        #start new training process
+        stats = []
+        i_start = 0
+        print("starting new training process")
+    else:
+        #load config and check whether identical
+        with open(os.path.join(SAVEPATH, "config.yml"), 'r') as file:
+            config_old = yaml.safe_load(file)
+        if config_old != config:
+            raise Exception("Existing config different from current config")
+        i_start, net_dict, stats = load_step()
+        g_net.load_state_dict(net_dict, strict=True)
+        print(f"starting from loaded iteration {i_start}")
+
     #create workers
-    stats = []
-    trajectories = []
     workers = [Worker(g_net, stats_queue, grads_queue, i) for i in range(N_W)]
     [w.start() for w in workers]  # workers will write the gradients to the parameters directly
     # [w.pull_params() for w in workers] #make workers identical copies of global network before training begins
-    for i_step in range(N_STEP): #performing one parallel update step
+    for i_step in range(i_start, N_STEP): #performing one parallel update step
         t0 = time.time()
         ###parallel trajectory sampling and gradient computation
         start_cond.set() # all processes start an iteration
@@ -336,16 +349,17 @@ if __name__ == "__main__":
             plt.figure()
             sns.lineplot(x="global ep",y=measure,data=data)
 
-    if config["tensorboard"]:
-        from torch.utils.tensorboard import SummaryWriter
-        # create writers
-        g_writer = SummaryWriter(os.path.join(SAVEPATH, "tb_g_net"))
-        l_writer = SummaryWriter(os.path.join(SAVEPATH, "tb_l_net"))
-        # write graph to file
-        rezip = zip(*trajectories)
-        b_s, _, _ = [torch.cat(elems) for elems in list(rezip)]  # concatenate torch tensors of all trajectories
-        g_writer.add_graph(g_net,b_s)
-        l_writer.add_graph(workers[0].l_net,b_s)
-        g_writer.close()
-        l_writer.close()
+    # #currently deprecated because it doesn't use the current worker
+    # if config["tensorboard"]:
+    #     from torch.utils.tensorboard import SummaryWriter
+    #     # create writers
+    #     g_writer = SummaryWriter(os.path.join(SAVEPATH, "tb_g_net"))
+    #     l_writer = SummaryWriter(os.path.join(SAVEPATH, "tb_l_net"))
+    #     # write graph to file
+    #     rezip = zip(*trajectories)
+    #     b_s, _, _ = [torch.cat(elems) for elems in list(rezip)]  # concatenate torch tensors of all trajectories
+    #     g_writer.add_graph(g_net,b_s)
+    #     l_writer.add_graph(workers[0].l_net,b_s)
+    #     g_writer.close()
+    #     l_writer.close()
 
