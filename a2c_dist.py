@@ -20,6 +20,7 @@ args = parser.parse_args()
 with open(os.path.abspath(args.configpath), 'r') as file:
         config = yaml.safe_load(file)
 SAVEPATH = args.savepath
+SAVE_IVAL = 1
 
 torch.manual_seed(config["seed"])
 ENV_CONFIG = config["env_config"]
@@ -297,7 +298,7 @@ if __name__ == "__main__":
             raise Exception("Existing config different from current config")
         i_start, net_dict, stats = load_step()
         g_net.load_state_dict(net_dict, strict=True)
-        print(f"starting from loaded iteration {i_start}")
+        print(f"starting from loaded iteration {i_start+1}")
 
     #create workers
     workers = [Worker(g_net, stats_queue, grads_queue, i) for i in range(N_W)]
@@ -334,11 +335,12 @@ if __name__ == "__main__":
         ### centralized optimizer step
         optimizer.step()  # centralized optimizer updates global network
         #bookkeeping
-        if i_step%1 == 0: #save global network
+        if i_step%SAVE_IVAL == 0: #save global network
             save_step(i_step, g_net, stats)
         t1 = time.time()
         print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: iteration {i_step}: {t1-t0:.1f}s")
 
+    save_step(i_step, g_net, stats)
     [w.terminate() for w in workers]
 
     if config["plot"]:
