@@ -19,6 +19,8 @@ env_config:
    max_steps: 3000 #maximum number of steps before environment terminates
    verbose: False
 net_config:
+   n_f_conv1: 12
+   n_f_conv2: 24
    att_emb_size: 64
    n_heads: 2
    n_att_stack: 2

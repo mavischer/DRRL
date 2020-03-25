@@ -58,7 +58,8 @@ class AttentionModule(nn.Module):
 
 class DRRLnet(nn.Module):
 
-    def __init__(self, h, w, outputs, att_emb_size=64, n_heads=2, n_att_stack=2, n_fc_layers=4, pad=True):
+    def __init__(self, h, w, outputs, n_f_conv1 = 12, n_f_conv2 = 24,
+                 att_emb_size=64, n_heads=2, n_att_stack=2, n_fc_layers=4, pad=True):
 
         #internal action replay buffer for simple training algorithms
         self.saved_actions = []
@@ -67,9 +68,6 @@ class DRRLnet(nn.Module):
         self.pad = pad
 
         super(DRRLnet, self).__init__()
-
-        n_f_conv1 = 12
-        n_f_conv2 = 24
 
         self.conv1 = nn.Conv2d(3, n_f_conv1, kernel_size=2, stride=1)
         #possibly batch or layer norm, neither was mentioned in the paper though

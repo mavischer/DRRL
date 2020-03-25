@@ -206,7 +206,8 @@ class Worker(mp.Process):
         m = torch.distributions.Categorical(p_)
         # e_w = min(1, 2*0.995**opt_step) #todo: try out entropy annealing!
         e_w = 0.005  # like in paper
-        total_loss = (0.5 * td.pow(2) - m.log_prob(a_) * td.detach().squeeze() + e_w * m.entropy()).mean()
+        total_loss = (0.5 * td.pow(2) - m.log_prob(a_) * td.squeeze() + e_w * m.entropy()).mean() #why was
+        # there a .detach here?
 
         return total_loss.sum()
 
