@@ -136,7 +136,7 @@ class Worker(mp.Process):
             p_, v_ = self.l_net.forward(s_)
 
             #backward pass to calculate gradients
-            loss = self.a2c_loss(s_,a_,r_disc,p_, v_)
+            loss, loss_dict = self.a2c_loss(s_,a_,r_disc,p_, v_)
             loss.backward()
             # t_grads = time.time()
             # print(f"{self.name}: calculating gradients took {t_grads-t_sample:.2f}s")
@@ -153,6 +153,7 @@ class Worker(mp.Process):
                               "success": (r==env.reward_gem),
                               "steps": ep_t + 1,
                               "walltime": t_end-t_start},
+                             **loss_dict,
                              **env_config})
             self.grads_q.put(grad_dict)
             # print(f"{self.name}: distributing gradients took {t_end-t_grads:.2f}s")
@@ -202,14 +203,27 @@ class Worker(mp.Process):
 
         Returns: Summed losses of trajectory
         """
-        td = r_disc - v_
-        m = torch.distributions.Categorical(p_)
-        # e_w = min(1, 2*0.995**opt_step) #todo: try out entropy annealing!
-        e_w = 0.005  # like in paper
-        total_loss = (0.5 * td.pow(2) - m.log_prob(a_) * td.squeeze() + e_w * m.entropy()).mean() #why was
-        # there a .detach here?
 
-        return total_loss.sum()
+        # critic loss
+        td = r_disc - v_.squeeze()
+        c_loss = td.pow(2)
+        # actor loss
+        m = torch.distributions.Categorical(p_)
+        a_loss = - m.log_prob(a_) * td
+        # entropy term
+        # e_w = min(1, 2*0.995**opt_step) #todo: check entropy annealing!
+        e_w = 0.005  # like in paper
+        e_loss = m.entropy()
+        total_loss = (0.5 * c_loss + a_loss - e_w * e_loss).mean()  #why was there a .detach here?
+
+        # m = torch.distributions.Categorical(p_)
+        # # e_w = min(1, 2*0.995**opt_step) #todo: try out entropy annealing!
+        # e_w = 0.005  # like in paper
+        # total_loss = (0.5 * td.pow(2) - m.log_prob(a_) * td.squeeze() + e_w * m.entropy()).mean()
+
+        return total_loss, {"critic loss": c_loss.mean().item()*0.5,
+                                  "actor loss": a_loss.mean().item(),
+                                  "entropy loss": e_loss.mean().item()*e_w}
 
     def pull_params(self):
         """Update own params from global network."""
