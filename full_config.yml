@@ -36,6 +36,8 @@ optimizer:
    Adam #RMSprop #or Adam
 lr:
    0.00001
+e_schedule:
+   True
 tensorboard:
    False
 plot:
