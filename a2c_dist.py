@@ -91,14 +91,15 @@ class Worker(mp.Process):
         episode.
         Write to grads_queue the gradients are written directly to the central learner's parameters grads.
         """
-        ### generate random environment
-        env_config = random_config()
-        env = gym.make('gym_boxworld:boxworld-v0', **env_config)
 
         ### sampling trajectory
         iteration = 0 #basically a private i_step
         while start_cond.wait(1000): #wait for background process to signal start of an episode (if timeout reached
             # wait returns false and run is aborted
+            ### generate random environment for this episode
+            env_config = random_config()
+            env = gym.make('gym_boxworld:boxworld-v0', **env_config)
+            
             # print(f"{self.name}: starting iteration")
             t_start = time.time()
             self.pull_params()
