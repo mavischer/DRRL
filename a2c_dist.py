@@ -218,7 +218,7 @@ class Worker(mp.Process):
         # e_w = min(1, 2*0.995**opt_step) #todo: check entropy annealing!
         # e_w = 0.005  # like in paper
         if self.e_schedule:
-            e_w = - max(0, min(2, -iteration/200 + 2.5)) #linear annealing between episode 100 and 500 from 2 to 0
+            e_w = max(0, min(2, -iteration/200 + 2.5)) #linear annealing between episode 100 and 500 from 2 to 0
         else:
             e_w = 0.5
         e_loss = m.entropy()
