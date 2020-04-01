@@ -61,7 +61,7 @@ GAMMA = config["gamma"]
 
 
 class Worker(mp.Process):
-    def __init__(self, g_net, stats_q, grads_q, w_idx, e_schedule=True, device=l_device, verbose=False):
+    def __init__(self, g_net, stats_q, grads_q, w_idx, i_start=0, e_schedule=True, device=l_device, verbose=False):
         """
             Args:
                 gnet:   global network that performs parameter updates
@@ -83,6 +83,7 @@ class Worker(mp.Process):
         self.e_schedule = e_schedule
         self.device = device
         self.verbose = verbose
+        self.iter = i_start #basically a private i_step
 
     def run(self):
         """Runs an entire episode, calculates gradients for all weights
@@ -93,13 +94,12 @@ class Worker(mp.Process):
         """
 
         ### sampling trajectory
-        iteration = 0 #basically a private i_step
         while start_cond.wait(1000): #wait for background process to signal start of an episode (if timeout reached
             # wait returns false and run is aborted
             ### generate random environment for this episode
             env_config = random_config()
             env = gym.make('gym_boxworld:boxworld-v0', **env_config)
-            
+
             # print(f"{self.name}: starting iteration")
             t_start = time.time()
             self.pull_params()
@@ -139,7 +139,7 @@ class Worker(mp.Process):
             p_, v_ = self.l_net.forward(s_)
 
             #backward pass to calculate gradients
-            loss, loss_dict = self.a2c_loss(s_,a_,r_disc,p_, v_, iteration)
+            loss, loss_dict = self.a2c_loss(s_,a_,r_disc,p_, v_)
             loss.backward()
             # t_grads = time.time()
             # print(f"{self.name}: calculating gradients took {t_grads-t_sample:.2f}s")
@@ -161,7 +161,7 @@ class Worker(mp.Process):
             self.grads_q.put(grad_dict)
             # print(f"{self.name}: distributing gradients took {t_end-t_grads:.2f}s")
             # print(f"{self.name}: episode took {t_end-t_start}s")
-            iteration += 1
+            self.iter += 1
 
     def prettify_trajectory(self, s_, a_, r_):
         """Prepares trajectory to compute loss on, just to make the code clearer
@@ -195,7 +195,7 @@ class Worker(mp.Process):
 
         return(s_,a_,r_disc)
 
-    def a2c_loss(self, s_,a_,r_disc,p_, v_, iteration):
+    def a2c_loss(self, s_,a_,r_disc,p_, v_):
         """Calculate advantage-actor-critic loss on entire episode
         Args:
             for the entire trajectory, one tensor each of
@@ -204,7 +204,6 @@ class Worker(mp.Process):
             r_disc: temporally discounted future rewards
             p_: action probabilities
             v_: value estimates
-            iteration: for scheduling of parameters
 
         Returns: Summed losses of trajectory
         """
@@ -219,7 +218,9 @@ class Worker(mp.Process):
         # e_w = min(1, 2*0.995**opt_step) #todo: check entropy annealing!
         # e_w = 0.005  # like in paper
         if self.e_schedule:
-            e_w = max(0, min(2, -iteration/200 + 2.5)) #linear annealing between episode 100 and 500 from 2 to 0
+            # e_w = max(0, min(2, -self.iter/200 + 2.5)) #linear annealing between episode 100 and 500 from 2 to 0
+            e_w = max(0, min(1, -self.iter/400 + 1.25)) #linear annealing between episode 100 and 500 from 1 to 0
+
         else:
             e_w = 0.5
         e_loss = m.entropy()
@@ -326,7 +327,8 @@ if __name__ == "__main__":
         print(f"starting from loaded iteration {i_start+1}")
 
     #create workers
-    workers = [Worker(g_net, stats_queue, grads_queue, i, config["e_schedule"]) for i in range(N_W)]
+    workers = [Worker(g_net, stats_queue, grads_queue, i,
+                      i_start=i_start, e_schedule=config["e_schedule"]) for i in range(N_W)]
     [w.start() for w in workers]  # workers will write the gradients to the parameters directly
     # [w.pull_params() for w in workers] #make workers identical copies of global network before training begins
     for i_step in range(i_start, N_STEP): #performing one parallel update step
