@@ -153,7 +153,7 @@ class Worker(mp.Process):
 
             self.stats_q.put({**{"cumulative reward": ep_r,
                               "loss": loss.item(),
-                              "success": (r==env.reward_gem),
+                              "success": (r==env.reward_gem+env.step_cost),
                               "steps": ep_t + 1,
                               "walltime": t_end-t_start},
                              **loss_dict,
