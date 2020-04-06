@@ -19,6 +19,7 @@ parser.add_argument("-s", "--savepath", type=str, required=True, help="path/to/s
 args = parser.parse_args()
 with open(os.path.abspath(args.configpath), 'r') as file:
         config = yaml.safe_load(file)
+
 SAVEPATH = args.savepath
 SAVE_IVAL = 1
 
@@ -58,7 +59,10 @@ del env
 #configure learning
 N_STEP = config["n_step"]
 GAMMA = config["gamma"]
-
+if "e_schedule" in config.keys():
+    e_schedule = config["e_schedule"]
+else:
+    e_schedule = False
 
 class Worker(mp.Process):
     def __init__(self, g_net, stats_q, grads_q, w_idx, i_start=0, e_schedule=True, device=l_device, verbose=False):
@@ -213,16 +217,15 @@ class Worker(mp.Process):
         c_loss = td.pow(2)
         # actor loss
         m = torch.distributions.Categorical(p_)
-        a_loss = - m.log_prob(a_) * td
+        a_loss = - m.log_prob(a_) * td.detach()
         # entropy term
-        # e_w = min(1, 2*0.995**opt_step) #todo: check entropy annealing!
-        # e_w = 0.005  # like in paper
         if self.e_schedule:
             # e_w = max(0, min(2, -self.iter/200 + 2.5)) #linear annealing between episode 100 and 500 from 2 to 0
-            e_w = max(0, min(1, -self.iter/400 + 1.25)) #linear annealing between episode 100 and 500 from 1 to 0
+            # e_w = max(0, min(1, -self.iter/400 + 1.25)) #linear annealing between episode 100 and 500 from 1 to 0
+            e_w = max(0, min(0.5, -self.iter/800 + 0.625)) #linear annealing between episode 100 and 500 from 0.5 to 0
 
         else:
-            e_w = 0.5
+            e_w = 0.5 #in paper they report 0.05 but probably take the sum instaead of the mean
         e_loss = m.entropy()
         total_loss = (0.5 * c_loss + a_loss - e_w * e_loss).mean()  #why was there a .detach here?
 
@@ -284,6 +287,33 @@ def load_step():
     stats = df.to_dict(orient="records")
     return(i_step, state_dict, stats)
 
+#set up plotting gradients
+if config["plot_gradients"]:
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(nrows=6, ncols=N_STEP, sharex=True)
+    plt.tight_layout()
+if config["plot_gradients"] or config["tensorboard"]:
+    import numpy as np
+
+
+def plot_gradients(g_net, i_step, N_STEP, axes):
+    try:
+        attMod = g_net.attMod.linear1
+    except:
+        attMod = g_net.baseMod.baseline_conv_1_1
+    layers = [g_net.conv1, g_net.conv2, attMod, g_net.fc_seq.fc1, g_net.logits, g_net.value]
+    l_names = ["conv1", "conv2", "attLin1", "fc1", "p", "v"]
+    bins = np.arange(-4,2,0.1)
+    for i_l,layer in enumerate(layers):
+        axes[i_l,i_step].hist(layer.weight.grad.flatten(), bins=bins)
+        axes[i_l,i_step].set_yticklabels([])
+        if i_step == 0:
+            axes[i_l,i_step].set_ylabel(l_names[i_l])
+        if i_l == 0:
+            axes[i_l,i_step].set_title(f"it {i_step}")
+
+
 if __name__ == "__main__":
     mp.set_start_method("fork") #fork is unix default and means child process inherits all resources from parent
     # process. in case problems occur, might use "forkserver"
@@ -328,7 +358,7 @@ if __name__ == "__main__":
 
     #create workers
     workers = [Worker(g_net, stats_queue, grads_queue, i,
-                      i_start=i_start, e_schedule=config["e_schedule"]) for i in range(N_W)]
+                      i_start=i_start, e_schedule=e_schedule) for i in range(N_W)]
     [w.start() for w in workers]  # workers will write the gradients to the parameters directly
     # [w.pull_params() for w in workers] #make workers identical copies of global network before training begins
     for i_step in range(i_start, N_STEP): #performing one parallel update step
@@ -351,6 +381,8 @@ if __name__ == "__main__":
             stats_curr["global ep"] = i_step #append current global step to dictionary
             stats.append(stats_curr)
 
+        if config["plot_gradients"]: #visualize gradients at crucial points in network as histogram for every iteration
+            plot_gradients(g_net, i_step, N_STEP, axes)
         # ### copying gradients and perform optimizer step on global network
         # while not grads_queue.empty():
         #     grad_dict = grads_queue.get()
@@ -369,26 +401,45 @@ if __name__ == "__main__":
 
     save_step(i_step, g_net, stats)
     [w.terminate() for w in workers]
+    #
+    # if config["plot"]:
+    #     import matplotlib.pyplot as plt
+    #     import seaborn as sns
+    #     data = pd.DataFrame(stats)
+    #     for i,measure in enumerate(["cumulative reward", "loss", "steps"]):
+    #         plt.figure()
+    #         sns.lineplot(x="global ep",y=measure,data=data)
 
-    if config["plot"]:
-        import matplotlib.pyplot as plt
-        import seaborn as sns
-        data = pd.DataFrame(stats)
-        for i,measure in enumerate(["cumulative reward", "loss", "steps"]):
-            plt.figure()
-            sns.lineplot(x="global ep",y=measure,data=data)
+    #currently deprecated because it doesn't use the current worker
+    if config["tensorboard"]:
+        from torch.utils.tensorboard import SummaryWriter
+        # create writers
+        g_writer = SummaryWriter(os.path.join(SAVEPATH, "tb_g_net"))
+        l_writer_train = SummaryWriter(os.path.join(SAVEPATH, "tb_l_net_train"))
+        l_writer_eval = SummaryWriter(os.path.join(SAVEPATH, "tb_l_net_eval"))
+        #generate random trajectory to feed-forward as batch
+        w0 = workers[0]
+        env = gym.make('gym_boxworld:boxworld-v0', **random_config())
+        env.reset()
+        trajectory = []
+        while True:
+            s, _, done, _ = env.step(np.random.choice(4))
+            s = torch.tensor([s.T], dtype=torch.float)
+            trajectory.append(s)
+            if done:
+                break
+        # write graph to file
+        s_ = torch.cat(trajectory).detach()
 
-    # #currently deprecated because it doesn't use the current worker
-    # if config["tensorboard"]:
-    #     from torch.utils.tensorboard import SummaryWriter
-    #     # create writers
-    #     g_writer = SummaryWriter(os.path.join(SAVEPATH, "tb_g_net"))
-    #     l_writer = SummaryWriter(os.path.join(SAVEPATH, "tb_l_net"))
-    #     # write graph to file
-    #     rezip = zip(*trajectories)
-    #     b_s, _, _ = [torch.cat(elems) for elems in list(rezip)]  # concatenate torch tensors of all trajectories
-    #     g_writer.add_graph(g_net,b_s)
-    #     l_writer.add_graph(workers[0].l_net,b_s)
-    #     g_writer.close()
-    #     l_writer.close()
+        g_writer.add_graph(g_net,s_)
+        w0.l_net.eval()
+        l_writer_eval.add_graph(w0.l_net,s_)
+        w0.l_net.train()
+        l_writer_train.add_graph(w0.l_net,s_)
+        g_writer.close()
+        l_writer_eval.close()
+        l_writer_train.close()
+
+        ###visualize gradients at critical points
+
 
