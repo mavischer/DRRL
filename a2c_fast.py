@@ -13,7 +13,6 @@ from helpers.a2c_ppo_acktr.model import Policy, DRRLBase
 from helpers.a2c_ppo_acktr.storage import RolloutStorage
 # from baselines.common import plot_util
 
-#todo: update required packages
 #todo: viz_results include script to join monitors
 
 #
@@ -72,7 +71,7 @@ def main():
     else:
         #start new entropy logging file
         with open(save_stats_path, "w") as f:
-            f.write("#value loss, action loss, entropy\n")
+            f.write("value loss,action loss,entropy\n")
 
         # write config to new directory
         with open(os.path.join(args.savepath, "config.yml"), "w+") as f:
