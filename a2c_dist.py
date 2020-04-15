@@ -30,11 +30,6 @@ NET_CONFIG = config["net_config"]
 if config["n_cpus"] == -1:
     config["n_cpus"] = mp.cpu_count() -1
 N_W = config["n_cpus"]
-# g_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-g_device = torch.device("cpu") #gpu doesn't make sense here because all it does is basically run optimizer on
-# received gradients
-print(f"running global net on {g_device}")
-l_device = torch.device("cpu")
 
 def random_config(raw_config=ENV_CONFIG):
     """Field in config can contain a list of values that a worker randomly chooses from when starting to generate a
@@ -65,7 +60,7 @@ else:
     e_schedule = False
 
 class Worker(mp.Process):
-    def __init__(self, g_net, stats_q, grads_q, w_idx, i_start=0, e_schedule=True, device=l_device, verbose=False):
+    def __init__(self, g_net, stats_q, grads_q, w_idx, i_start=0, e_schedule=True, verbose=False):
         """
             Args:
                 gnet:   global network that performs parameter updates
@@ -73,7 +68,6 @@ class Worker(mp.Process):
                 grads_q:queue to put gradients
                 w_idx:  integer index of worker process for identification
                 e_schedule: schedule entropy weight
-                device: assigned device
                 verbose:whether to print results of current game (better disable for large number of workers)
         """
         super(Worker, self).__init__()
@@ -81,11 +75,9 @@ class Worker(mp.Process):
         self.g_net = g_net
         self.stats_q = stats_q
         self.grads_q = grads_q
-        self.l_net = DRRLnet(INP_W, INP_H, N_ACT, **NET_CONFIG).to(device)  # local network
+        self.l_net = DRRLnet(INP_W, INP_H, N_ACT, **NET_CONFIG)  # local network
         self.l_net.train()  # sets net in training mode so gradient's don't clutter memory
-        print(f"{self.name}: running local net on {l_device}")
         self.e_schedule = e_schedule
-        self.device = device
         self.verbose = verbose
         self.iter = i_start #basically a private i_step
 
@@ -102,7 +94,7 @@ class Worker(mp.Process):
             # wait returns false and run is aborted
             ### generate random environment for this episode
             env_config = random_config()
-            env = gym.make('gym_boxworld:boxworld-v0', **env_config)
+            env = gym.make('gym_boxworld:boxworld-v0', **random_config())
 
             # print(f"{self.name}: starting iteration")
             t_start = time.time()
@@ -113,7 +105,7 @@ class Worker(mp.Process):
             ep_r = 0. #total episode reward
             ep_t = 0  #episode step t, both just for oversight
             while True: #generate variable-length trajectory in this loop
-                s = torch.tensor([s.T], dtype=torch.float, device=self.device)  # transpose for CWH-order, apparently
+                s = torch.tensor([s.T], dtype=torch.float)  # transpose for CWH-order, apparently
                 # conv layer want floats
                 p, _ = self.l_net(s)
                 m = Categorical(p) # create a categorical distribution over the list of probabilities of actions
@@ -192,10 +184,10 @@ class Worker(mp.Process):
         # every element in r_disc now contains reward at corresponding step plus future discounted rewards
 
         #cast everything to tensors (states are already cast)
-        s_ = torch.cat(s_).to(device=g_device).detach()
-        a_ = torch.tensor(a_, dtype=torch.uint8, device=g_device).detach() #torch can only compute gradients for float
+        s_ = torch.cat(s_).detach()
+        a_ = torch.tensor(a_, dtype=torch.uint8).detach() #torch can only compute gradients for float
         # tensors, but this shouldn't be a problem
-        r_disc = torch.tensor(r_disc, dtype=torch.float16, device=g_device).detach()
+        r_disc = torch.tensor(r_disc, dtype=torch.float16).detach()
 
         return(s_,a_,r_disc)
 
@@ -318,7 +310,7 @@ if __name__ == "__main__":
     mp.set_start_method("fork") #fork is unix default and means child process inherits all resources from parent
     # process. in case problems occur, might use "forkserver"
     #create global network and pipeline
-    g_net = DRRLnet(INP_W, INP_H, N_ACT, **NET_CONFIG).to(g_device) # global network
+    g_net = DRRLnet(INP_W, INP_H, N_ACT, **NET_CONFIG) # global network
     g_net.zero_grad()
     g_net.share_memory()  # share the global parameters in multiprocessing #todo: check whether this makes a difference
     stats_queue = mp.SimpleQueue() #statistics about the episodes will be returned in this queue
@@ -369,7 +361,7 @@ if __name__ == "__main__":
         start_cond.clear() # this will halt processes' run method at the end of the current episode
 
         ###copying gradients to global net (also saving statistics)
-        g_net.zero_grad()
+        optimizer.zero_grad()
         for i_w in range(N_W):
             grad_dict = grads_queue.get()
             for name, param in g_net.named_parameters():
@@ -397,7 +389,12 @@ if __name__ == "__main__":
         if i_step%SAVE_IVAL == 0: #save global network
             save_step(i_step, g_net, stats)
         t1 = time.time()
-        print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: iteration {i_step}: {t1-t0:.1f}s")
+        stats_recent = stats[-N_W:]
+        steps_total_recent = 0
+        for s in stats_recent:
+            steps_total_recent += s["steps"]
+        print(f"{time.strftime('%a %d %b %H:%M:%S', time.gmtime())}: iteration {i_step}: {t1-t0:.1f}s, "
+              f"{steps_total_recent / (t1 - t0)}FPS ")
 
     save_step(i_step, g_net, stats)
     [w.terminate() for w in workers]
@@ -420,7 +417,9 @@ if __name__ == "__main__":
         #generate random trajectory to feed-forward as batch
         w0 = workers[0]
         env = gym.make('gym_boxworld:boxworld-v0', **random_config())
+
         env.reset()
+
         trajectory = []
         while True:
             s, _, done, _ = env.step(np.random.choice(4))
