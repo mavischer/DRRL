@@ -13,3 +13,4 @@ dependencies:
   - pip:
     - gym==0.17.0
     - pyyaml==5.3
+    - baselines==0.1.6

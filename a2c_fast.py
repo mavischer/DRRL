@@ -13,7 +13,6 @@ from helpers.a2c_ppo_acktr.model import Policy, DRRLBase
 from helpers.a2c_ppo_acktr.storage import RolloutStorage
 # from baselines.common import plot_util
 
-#todo: update repo readme
 #todo: update required packages
 #todo: viz_results include script to join monitors
 
