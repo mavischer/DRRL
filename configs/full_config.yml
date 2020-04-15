@@ -1,0 +1,50 @@
+#THIS CONFIG FILE CONTAINS ALL PARAMETERIZABLE VARIABLES WITH DEFAULT VALUES,
+#most of them are kwargs in the respecitve inits, so they can be left out of the config file,
+# but they are listed here for reference.
+seed:
+   123
+n_cpus: #number of cpus used
+   10
+cuda:
+   False
+env_name:
+   gym_boxworld:boxworldRandom-v0
+env_config:
+   n: 8 #size of board
+   list_goal_lengths: [3,4] #length of correct path (e.g. 4 means goal can be unlocked with 3rd key), can be list
+   list_num_distractors: [1,2] #number of distractor branches, can be list
+   list_distractor_lengths: [1] #length/"depth" of each distractor branch, can be list
+   reward_gem: 10 #reward structure
+   step_cost: 0 #assumed to be negative
+   reward_dead: 0
+   reward_correct_key: 1
+   reward_wrong_key: -1
+   num_colors: 20
+   max_steps: 3000 #maximum number of steps before environment terminates
+   verbose: False
+net_config:
+   n_f_conv1: 12
+   n_f_conv2: 24
+   att_emb_size: 64
+   n_heads: 2
+   n_att_stack: 2
+   n_fc_layers: 4
+   pad: True #padding will maintain size of state space
+   baseline_mode: False #will replace attentional module with several convolutional layers to create baseline module
+   n_baseMods: 3 #3and 6 are default in paper
+gamma: #temporal discount factor
+   0.99
+n_step: #number of a2c updates, i.e. number of episodes each worker samples
+   10
+optimizer:
+   Adam #RMSprop #or Adam
+lr:
+   0.00001
+update_every_n_steps:
+   5
+e_schedule:
+   True
+tensorboard:
+   False
+plot:
+   False
