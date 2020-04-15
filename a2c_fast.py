@@ -1,42 +1,21 @@
-import copy
-import glob
-import os
-import time
-from collections import deque
-
-import gym
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-
-import torch
-import torch.multiprocessing as mp
-import gym
-from attention_module import DRRLnet
-from torch.distributions import Categorical
 import os
 import argparse
 import yaml
 import time
-import pandas as pd
-import random
-
 import csv
+from collections import deque
 
-from a2c_ppo_acktr import algo, utils
-from a2c_ppo_acktr.envs import make_vec_envs
-from a2c_ppo_acktr.model import Policy, DRRLBase
-from a2c_ppo_acktr.storage import RolloutStorage
-from baselines.common import plot_util
+from helpers.a2c_ppo_acktr import algo, utils
+from helpers.a2c_ppo_acktr.envs import make_vec_envs
+from helpers.a2c_ppo_acktr.model import Policy, DRRLBase
+from helpers.a2c_ppo_acktr.storage import RolloutStorage
+# from baselines.common import plot_util
 
-#todo: remove unused imports
 #todo: update repo readme
 #todo: update required packages
-#todo: update repo structure
 #todo: viz_results include script to join monitors
-#todo: update full config
 
 #
 # if "e_schedule" in config.keys(): #todo: implement entropy weight scheduling
@@ -58,7 +37,6 @@ def main():
     LOG_EVERY = 100
 
     # todo: implement adam optimizer?
-    # todo: new project structure
 
     #set up torch
     torch.manual_seed(config["seed"])

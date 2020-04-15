@@ -5,8 +5,8 @@ import torch.nn.functional as F
 from DRRL.attention_module import AttentionModule
 from collections import OrderedDict
 
-from a2c_ppo_acktr.distributions import Bernoulli, Categorical, DiagGaussian
-from a2c_ppo_acktr.utils import init
+from helpers.a2c_ppo_acktr.distributions import Bernoulli, Categorical, DiagGaussian
+from helpers.a2c_ppo_acktr.utils import init
 
 
 class Flatten(nn.Module):

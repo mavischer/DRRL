@@ -1,6 +1,5 @@
-#THIS CONFIG FILE CONTAINS ALL PARAMETERIZABLE VARIABLES WITH DEFAULT VALUES,
-#most of them are kwargs in the respecitve inits, so they can be left out of the config file,
-# but they are listed here for reference.
+#THIS CONFIG FILE CONTAINS A SUBSET OF PARAMETERIZABLE VARIABLES, and unlike full_config.yml not all of them in their
+#default value, This is to give an impression of what will be parameterized in a usual run.
 seed:
    123
 n_cpus: #number of cpus used
@@ -10,10 +9,10 @@ cuda:
 env_name: #only used in a2c_fast.py
    gym_boxworld:boxworldRandom-v0
 env_config:
-   n: 12 #size of board
-   list_goal_lengths: [5] #length of correct path (e.g. 4 means goal can be unlocked with 3rd key), can be list
-   list_num_distractors: [2] #number of distractor branches, can be list
-   list_distractor_lengths: [2] #length/"depth" of each distractor branch, can be list
+   n: 8 #size of board
+   list_goal_lengths: [2,3] #length of correct path (e.g. 4 means goal can be unlocked with 3rd key), can be list
+   list_num_distractors: [1,2] #number of distractor branches, can be list
+   list_distractor_lengths: [1,2] #length/"depth" of each distractor branch, can be list
    reward_gem: 10 #reward structure
    step_cost: 0 #assumed to be negative
    reward_dead: 0
