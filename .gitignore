@@ -2,7 +2,6 @@ a2c_single.py
 a3c_attention.py
 ac_attention.py
 train_attention.py
-utils.py
 configEXMPL.py
 
 
