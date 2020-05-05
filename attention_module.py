@@ -10,7 +10,7 @@ from collections import OrderedDict
 
 class AttentionHead(nn.Module):
 
-    def __init__(self, elem_size, emb_size):
+    def __init__(self, n_elems, elem_size, emb_size):
         super(AttentionHead, self).__init__()
         self.sqrt_emb_size = int(math.sqrt(emb_size))
         #queries, keys, values
@@ -28,6 +28,7 @@ class AttentionHead(nn.Module):
         self.vln = nn.LayerNorm(elem_size, elementwise_affine=True)
 
     def forward(self, x):
+        # print(f"input: {x.shape}")
         Q = self.qln(self.query(x))
         K = self.kln(self.key(x))
         V = self.vln(self.value(x))
@@ -44,7 +45,7 @@ class AttentionModule(nn.Module):
         # self.input_shape = input_shape
         # self.elem_size = elem_size
         # self.emb_size = emb_size #honestly not really needed
-        self.heads =  nn.ModuleList(AttentionHead(elem_size, emb_size) for _ in range(n_heads))
+        self.heads =  nn.ModuleList(AttentionHead(n_elems, elem_size, emb_size) for _ in range(n_heads))
         self.linear1 = nn.Linear(n_heads*elem_size, elem_size)
         self.linear2 = nn.Linear(elem_size, elem_size)
 
