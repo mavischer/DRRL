@@ -10,29 +10,40 @@ from collections import OrderedDict
 
 class AttentionHead(nn.Module):
 
-    def __init__(self, elem_size, emb_size):
+    def __init__(self, n_elems, elem_size, emb_size):
         super(AttentionHead, self).__init__()
         self.sqrt_emb_size = int(math.sqrt(emb_size))
         #queries, keys, values
         self.query = nn.Linear(elem_size, emb_size)
-        self.qln = nn.LayerNorm(emb_size, elementwise_affine=False)
+        self.key = nn.Linear(elem_size, emb_size)
+        self.value = nn.Linear(elem_size, elem_size)
+        #layer norms:
         # From 2018 version of paper it sounds like individual projected
         # entities q_i, k_i, v_i are 0,1 normalized (layer norm). However it's unclear whether and how gain and bias
         # are learned, e.g. one gain and bias for each projected entity, or for each element in the vectors of each
         # entity (and whether these are shared), or not at all?
+        #
+        #https://github.com/gyh75520/Relational_DRL/blob/a5f0d478e16b961d2bd1640952f1328046f85672/ opted to have
+        # separate gains and biases for every embedding entry in q,k,v separately and not shared across heads
+
+        # utils.py  # L100
         # For now I decided to not use an affine transform in the end.
-        self.key = nn.Linear(elem_size, emb_size)
-        self.kln = nn.LayerNorm(emb_size, elementwise_affine=False)
-        self.value = nn.Linear(elem_size, elem_size)
-        self.vln = nn.LayerNorm(elem_size, elementwise_affine=False)
-        self.softmax = nn.Softmax(dim=0) #hope dim=0 is correct
+        self.qln = nn.LayerNorm([n_elems, emb_size], elementwise_affine=True)
+        self.kln = nn.LayerNorm([n_elems, emb_size], elementwise_affine=True)
+        self.vln = nn.LayerNorm([n_elems, elem_size], elementwise_affine=True)
 
     def forward(self, x):
+        # print(f"input: {x.shape}")
         Q = self.qln(self.query(x))
         K = self.kln(self.key(x))
         V = self.vln(self.value(x))
-        return torch.bmm(self.softmax(torch.bmm(Q,K.transpose(1,2))/self.sqrt_emb_size),V)
-
+        # print(f"Q:{Q.shape}, K:{K.shape}, V:{V.shape}")
+        # print(f"QK': {torch.bmm(Q,K.transpose(1,2)).shape}")
+        softmax = F.softmax(torch.bmm(Q,K.transpose(1,2))/self.sqrt_emb_size, dim=-1)
+        # print(f"softmax: {torch.sum(softmax[0,0,:])}")
+        output = torch.bmm(softmax,V)
+        # print(f"output: {output.shape}")
+        return output
 
 class AttentionModule(nn.Module):
 
@@ -41,7 +52,7 @@ class AttentionModule(nn.Module):
         # self.input_shape = input_shape
         # self.elem_size = elem_size
         # self.emb_size = emb_size #honestly not really needed
-        self.heads =  nn.ModuleList(AttentionHead(elem_size, emb_size) for _ in range(n_heads))
+        self.heads =  nn.ModuleList(AttentionHead(n_elems, elem_size, emb_size) for _ in range(n_heads))
         self.linear1 = nn.Linear(n_heads*elem_size, elem_size)
         self.linear2 = nn.Linear(elem_size, elem_size)
 
