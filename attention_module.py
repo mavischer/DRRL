@@ -15,24 +15,27 @@ class AttentionHead(nn.Module):
         self.sqrt_emb_size = int(math.sqrt(emb_size))
         #queries, keys, values
         self.query = nn.Linear(elem_size, emb_size)
-        self.qln = nn.LayerNorm(emb_size, elementwise_affine=False)
-        # From 2018 version of paper it sounds like individual projected
-        # entities q_i, k_i, v_i are 0,1 normalized (layer norm). However it's unclear whether and how gain and bias
-        # are learned, e.g. one gain and bias for each projected entity, or for each element in the vectors of each
-        # entity (and whether these are shared), or not at all?
-        # For now I decided to not use an affine transform in the end.
         self.key = nn.Linear(elem_size, emb_size)
-        self.kln = nn.LayerNorm(emb_size, elementwise_affine=False)
         self.value = nn.Linear(elem_size, elem_size)
-        self.vln = nn.LayerNorm(elem_size, elementwise_affine=False)
-        self.softmax = nn.Softmax(dim=0) #hope dim=0 is correct
+        #layer norms:
+        # In the paper the authors normalize the projected Q,K and V with layer normalization. They don't state
+        # explicitly over which dimensions they normalize and how exactly gains and biases are shared. I decided to
+        # stick with with the solution from https://github.com/gyh75520/Relational_DRL/ because it makes the most
+        # sense to me: 0,1-normalize every projected entity and apply separate gain and bias to each entry in the
+        # embeddings. Weights are shared across entites, but not accross Q,K,V or heads.
+        self.qln = nn.LayerNorm(emb_size, elementwise_affine=True)
+        self.kln = nn.LayerNorm(emb_size, elementwise_affine=True)
+        self.vln = nn.LayerNorm(elem_size, elementwise_affine=True)
 
     def forward(self, x):
         Q = self.qln(self.query(x))
         K = self.kln(self.key(x))
         V = self.vln(self.value(x))
-        return torch.bmm(self.softmax(torch.bmm(Q,K.transpose(1,2))/self.sqrt_emb_size),V)
-
+        # softmax is taken over last dimension (rows) of QK': All the attentional weights going into a column/entity
+        # of V thus sum up to 1.
+        softmax = F.softmax(torch.bmm(Q,K.transpose(1,2))/self.sqrt_emb_size, dim=-1)
+        # print(f"softmax shape: {softmax.shape} and sum accross batch 1, column 1: {torch.sum(softmax[0,0,:])}")
+        return torch.bmm(softmax,V)
 
 class AttentionModule(nn.Module):
 

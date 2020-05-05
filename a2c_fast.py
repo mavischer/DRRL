@@ -40,7 +40,7 @@ def main():
     torch.manual_seed(config["seed"])
     torch.cuda.manual_seed_all(config["seed"])
 
-    torch.set_num_threads(1) #intra-op parallelism
+    torch.set_num_threads(config["n_cpus"]) #intra-op parallelism
     device = torch.device("cuda:0" if config["cuda"] and torch.cuda.is_available() else "cpu")
 
     #set up logging
@@ -95,7 +95,7 @@ def main():
         agent = algo.A2C_ACKTR(
             actor_critic,
             value_loss_coef=0.5,
-            entropy_coef=0.01,
+            entropy_coef=0.1,
             lr=config["lr"],
             eps=1e-5,
             alpha=0.99, #RMSProp optimizer alpha
