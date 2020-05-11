@@ -79,7 +79,6 @@ class Policy(nn.Module):
 
         return value, action_log_probs, dist_entropy, rnn_hxs
 
-
 class NNBase(nn.Module):
     def __init__(self, recurrent, recurrent_input_size, hidden_size):
         super(NNBase, self).__init__()
@@ -396,6 +395,39 @@ class DRRLBase(NNBase):
         p = self.fc_seq(pooled.view(pooled.size(0),pooled.size(1)))
 
         return self.critic_linear(p), p, rnn_hxs
+
+    def get_attention_weights(self, inputs, rnn_hxs=None, masks=None):
+        """ Forward pass through the architecture but only to the point where attention weights are calculated.
+        Identical up to that point to forward()
+        """
+
+        if self.baseline_mode:
+            raise Exception("Baseline mode set to True. No attention.")
+        x = inputs / 255.0
+        #convolutional module
+        if self.pad:
+            x = F.pad(x, (1,0,1,0)) #zero padding so state size stays constant
+        c = F.relu(self.conv1(x))
+        if self.pad:
+            c = F.pad(c, (1,0,1,0))
+        c = F.relu(self.conv2(c))
+        #append x,y coordinates to every sample in batch
+        batchsize = c.size(0)
+        # Filewriter complains about the this way of repeating the xymap, hope repeat is just as fine
+        # batch_maps = torch.cat(batchsize*[self.xymap])
+        batch_maps = self.xymap.repeat(batchsize,1,1,1,)
+        c = torch.cat((c,batch_maps),1)
+        #attentional module
+        #careful: we are flattening out x,y dimensions into 1 dimension, so shape changes from (batchsize, #filters,
+        # #conv2w, conv2h) to (batchsize, conv2w*conv2h, #filters), because downstream linear layers take last
+        # dimension to be input features
+        a = c.view(c.size(0),c.size(1), -1).transpose(1,2)
+        # n_att_mod passes through attentional module -> n_att_mod stacked modules with weight sharing
+        att_weights = []
+        for i_att in range(self.n_att_stack):
+            a, weights = self.attMod.get_att_weights(a)
+            att_weights.append(weights)
+        return att_weights
 
     # def get_body_output(self, x):
     #     #convolutional module

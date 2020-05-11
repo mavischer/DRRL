@@ -38,6 +38,16 @@ class AttentionHead(nn.Module):
         # print(f"softmax shape: {softmax.shape} and sum accross batch 1, column 1: {torch.sum(softmax[0,0,:])}")
         return torch.bmm(softmax,V)
 
+    def attention_weights(self, x):
+        # print(f"input: {x.shape}")
+        Q = self.qln(self.query(x))
+        K = self.kln(self.key(x))
+        V = self.vln(self.value(x))
+        # softmax is taken over last dimension (rows) of QK': All the attentional weights going into a column/entity
+        # of V thus sum up to 1.
+        softmax = F.softmax(torch.bmm(Q,K.transpose(1,2))/self.sqrt_emb_size, dim=-1)
+        return softmax
+
 class AttentionModule(nn.Module):
 
     def __init__(self, n_elems, elem_size, emb_size, n_heads):
@@ -58,6 +68,17 @@ class AttentionModule(nn.Module):
         mlp_out = F.relu(self.linear2(F.relu(self.linear1(A_cat))))
         # residual connection and final layer normalization
         return self.ln(x + mlp_out)
+
+    def get_att_weights(self, x):
+        """Version of forward function that also returns softmax-normalied QK' attention weights"""
+        #concatenate all heads' outputs
+        A_cat = torch.cat([head(x) for head in self.heads], -1)
+        # projecting down to original element size with 2-layer MLP, layer size = entity size
+        mlp_out = F.relu(self.linear2(F.relu(self.linear1(A_cat))))
+        # residual connection and final layer normalization
+        output = self.ln(x + mlp_out)
+        attention_weights = [head.attention_weights(x).detach() for head in self.heads]
+        return [output, attention_weights]
 
 class DRRLnet(nn.Module):
 
