@@ -19,6 +19,15 @@ from helpers.a2c_ppo_acktr.storage import RolloutStorage
 #     e_schedule = False
 
 
+def linear_decay(lr_init, lr_term, ep_max):
+    """"Returns a linear decay function with one parameter (episode). After ep_max is reached, lr plateaus at lr_term.
+        params:
+            lr_init: initial learning rate (episode 1)
+            lr_term: final learning rate
+            ep_max: when to reach final lr
+    """""
+    return lambda ep: 1 - ep * (1 - (lr_term / lr_init)) / ep_max if ep < ep_max else lr_term / lr_init
+
 def main():
     # parse yaml config file from cmdline
     parser = argparse.ArgumentParser(description='PyTorch A2C BoxWorld Experiment')
@@ -91,13 +100,9 @@ def main():
 
         #set up linear learning rate decay
         if config["lr_decay"]:
-            lr_init = config["lr"]
-            lr_term = 1e-5 #final constant learning rate
-            ep_max = 3e8 / (config["n_cpus"]*config["update_every_n_steps"]) #episode where constant plateau starts
-            # epoch_max = config["n_env_steps"]/(config["n_cpus"]*config["update_every_n_steps"])
-            # multiplicative decay factor s.t. learning rate decays from lr_init at episode 0 to lr_term at
-            # episode max
-            lr_lambda = lambda ep: 1-ep*(1-(lr_term/lr_init))/ep_max if ep < ep_max else lr_term/lr_init
+            ep_max = 3e8 / (config["n_cpus"] * config["update_every_n_steps"])
+            # ep_max = config["n_env_steps"] / (config["n_cpus"] * config["update_every_n_steps"])
+            lr_lambda = linear_decay(lr_init=config["lr"], lr_term=1e-5, ep_max=ep_max)
         else:
             lr_lambda = None
 
