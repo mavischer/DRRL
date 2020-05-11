@@ -13,9 +13,6 @@ from helpers.a2c_ppo_acktr.model import Policy, DRRLBase
 from helpers.a2c_ppo_acktr.storage import RolloutStorage
 # from baselines.common import plot_util
 
-#todo: viz_results include script to join monitors
-
-#
 # if "e_schedule" in config.keys(): #todo: implement entropy weight scheduling
 #     e_schedule = config["e_schedule"]
 # else:
@@ -92,11 +89,25 @@ def main():
             base_kwargs=base_kwargs)
         actor_critic.to(device)
 
+        #set up linear learning rate decay
+        if config["lr_decay"]:
+            lr_init = config["lr"]
+            lr_term = 1e-5 #final constant learning rate
+            ep_max = 3e8 / (config["n_cpus"]*config["update_every_n_steps"]) #episode where constant plateau starts
+            # epoch_max = config["n_env_steps"]/(config["n_cpus"]*config["update_every_n_steps"])
+            # multiplicative decay factor s.t. learning rate decays from lr_init at episode 0 to lr_term at
+            # episode max
+            lr_lambda = lambda ep: 1-ep*(1-(lr_term/lr_init))/ep_max if ep < ep_max else lr_term/lr_init
+        else:
+            lr_lambda = None
+
         agent = algo.A2C_ACKTR(
             actor_critic,
             value_loss_coef=0.5,
             entropy_coef=0.1,
             lr=config["lr"],
+            lr_decay=config["lr_decay"],
+            lr_lambda=lr_lambda,
             eps=1e-5,
             alpha=0.99, #RMSProp optimizer alpha
             max_grad_norm=0.5) #max norm of grads
