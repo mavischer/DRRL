@@ -11,22 +11,13 @@ from helpers.a2c_ppo_acktr import algo, utils
 from helpers.a2c_ppo_acktr.envs import make_vec_envs
 from helpers.a2c_ppo_acktr.model import Policy, DRRLBase
 from helpers.a2c_ppo_acktr.storage import RolloutStorage
+from helpers.lr_scheduling import Linear_decay
 # from baselines.common import plot_util
 
 # if "e_schedule" in config.keys(): #todo: implement entropy weight scheduling
 #     e_schedule = config["e_schedule"]
 # else:
 #     e_schedule = False
-
-
-def linear_decay(lr_init, lr_term, ep_max):
-    """"Returns a linear decay function with one parameter (episode). After ep_max is reached, lr plateaus at lr_term.
-        params:
-            lr_init: initial learning rate (episode 1)
-            lr_term: final learning rate
-            ep_max: when to reach final lr
-    """""
-    return lambda ep: 1 - ep * (1 - (lr_term / lr_init)) / ep_max if ep < ep_max else lr_term / lr_init
 
 def main():
     # parse yaml config file from cmdline
@@ -102,9 +93,9 @@ def main():
         if config["lr_decay"]:
             ep_max = 3e8 / (config["n_cpus"] * config["update_every_n_steps"])
             # ep_max = config["n_env_steps"] / (config["n_cpus"] * config["update_every_n_steps"])
-            lr_lambda = linear_decay(lr_init=config["lr"], lr_term=1e-5, ep_max=ep_max)
+            lr_sched_fn = Linear_decay(lr_init=config["lr"], lr_term=1e-5, ep_max=ep_max)
         else:
-            lr_lambda = None
+            lr_sched_fn = None
 
         agent = algo.A2C_ACKTR(
             actor_critic,
@@ -112,7 +103,7 @@ def main():
             entropy_coef=0.1,
             lr=config["lr"],
             lr_decay=config["lr_decay"],
-            lr_lambda=lr_lambda,
+            lr_sched_fn=lr_sched_fn,
             eps=1e-5,
             alpha=0.99, #RMSProp optimizer alpha
             max_grad_norm=0.5) #max norm of grads

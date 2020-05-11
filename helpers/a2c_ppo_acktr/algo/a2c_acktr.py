@@ -12,7 +12,7 @@ class A2C_ACKTR():
                  entropy_coef,
                  lr=None,
                  lr_decay=None,
-                 lr_lambda=None,
+                 lr_sched_fn=None,
                  eps=None,
                  alpha=None,
                  max_grad_norm=None,
@@ -34,9 +34,9 @@ class A2C_ACKTR():
             self.optimizer = optim.RMSprop(
                 actor_critic.parameters(), lr, eps=eps, alpha=alpha)
         if lr_decay:
-            if not lr_lambda:
+            if not lr_sched_fn:
                 raise ValueError("Please specify learning rate multiplicative factor function")
-            self.lr_scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_lambda)
+            self.lr_scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_sched_fn)
 
     def update(self, rollouts):
         obs_shape = rollouts.obs.size()[2:]
