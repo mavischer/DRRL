@@ -93,7 +93,11 @@ def main():
         if config["lr_decay"]:
             ep_max = 3e8 / (config["n_cpus"] * config["update_every_n_steps"])
             # ep_max = config["n_env_steps"] / (config["n_cpus"] * config["update_every_n_steps"])
-            lr_sched_fn = Linear_decay(lr_init=config["lr"], lr_term=1e-5, ep_max=ep_max)
+            if config["lr_term"]:
+                lr_term = config["lr_term"]
+            else:
+                lr_term = 1e-5
+            lr_sched_fn = Linear_decay(lr_init=config["lr"], lr_term=lr_term, ep_max=ep_max)
         else:
             lr_sched_fn = None
 
