@@ -160,10 +160,13 @@ class DRRLnet(nn.Module):
         self.fc_seq = nn.Sequential(fc_dict) #sequential container from ordered dict
         self.logits = nn.Linear(256, outputs)
         self.value = nn.Linear(256, 1)
+        self.outputmap = nn.Linear(256,outputs+1)
 
     # Called with either one element to determine next action, or a batch
     # during optimization. Returns tensor([[left0exp,right0exp]...]).
     def forward(self, x):
+        #cast environment observation into appropriate torch tensor
+        x = x.permute(0,3,1,2)
         #convolutional module
         if self.pad:
             x = F.pad(x, (1,0,1,0)) #zero padding so state size stays constant
@@ -213,6 +216,8 @@ class DRRLnet(nn.Module):
         pooled = F.max_pool1d(a.transpose(1,2), kernel_size=kernelsize) #pool out entity dimension
         #policy module: 4xFC256, then project to logits and value
         p = self.fc_seq(pooled.view(pooled.size(0),pooled.size(1)))
-        pi = F.softmax(self.logits(p), dim=1)
-        v = self.value(p) #todo: no normalization?
-        return pi, v
+        # pi = F.softmax(self.logits(p), dim=1)
+        # v = self.value(p) #todo: no normalization?
+        # return pi, v
+        #for A3C implementation:
+        return F.softmax(self.outputmap(p),-1)
