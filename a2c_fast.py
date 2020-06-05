@@ -104,7 +104,7 @@ def main():
         agent = algo.A2C_ACKTR(
             actor_critic,
             value_loss_coef=0.5,
-            entropy_coef=0.1,
+            entropy_coef=0.01,
             lr=config["lr"],
             lr_decay=config["lr_decay"],
             lr_sched_fn=lr_sched_fn,

@@ -162,6 +162,15 @@ class DRRLnet(nn.Module):
         self.value = nn.Linear(256, 1)
         self.outputmap = nn.Linear(256,outputs+1)
 
+        # def init_weights(m):
+        #     print(m)
+        #     if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+        #         torch.nn.init.orthogonal_(m.weight)
+        #         if m.bias is not None:
+        #             torch.nn.init.zeros_(m.bias)
+        #
+        # self.apply(init_weights)
+
     # Called with either one element to determine next action, or a batch
     # during optimization. Returns tensor([[left0exp,right0exp]...]).
     def forward(self, x):

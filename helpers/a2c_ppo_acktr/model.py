@@ -6,7 +6,7 @@ from DRRL.attention_module import AttentionModule
 from collections import OrderedDict
 
 from helpers.a2c_ppo_acktr.distributions import Bernoulli, Categorical, DiagGaussian
-from helpers.a2c_ppo_acktr.utils import init
+from helpers.a2c_ppo_acktr.utils import init, init_flexible
 
 
 class Flatten(nn.Module):
@@ -236,7 +236,7 @@ class MLPBase(NNBase):
 class DRRLBase(NNBase):
     """Adaptation of DRRLnet class more easily usable with pytorch-a2c-ppo-acktr-gail implementation"""
     def __init__(self, num_inputs, recurrent=False, hidden_size=512, w=12, h=12, n_f_conv1 = 12, n_f_conv2 = 24, pad=True,
-                 att_emb_size=64, n_heads=2, n_att_stack=2, n_fc_layers=4,
+                 att_emb_size=64, n_heads=2, n_att_stack=2, n_fc_layers=4, w_init = "orthogonal",
                  baseline_mode=False, n_baseMods=3):
         """
         Args:
@@ -270,8 +270,14 @@ class DRRLBase(NNBase):
         self.n_baseMods = n_baseMods
         super(DRRLBase, self).__init__(recurrent, hidden_size, hidden_size)
 
-        init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.
-                               constant_(x, 0), nn.init.calculate_gain('relu'))
+        if w_init=="orthogonal": #nn.init.orthogonal doesn't compute gain on its own
+            init_ = lambda m: init_flexible(m, nn.init.orthogonal_, lambda x: nn.init.
+                                   constant_(x, 0), {"gain": nn.init.calculate_gain('relu')})
+        elif w_init=="kaiming":
+            init_ = lambda m: init_flexible(m, nn.init.kaiming_uniform_, lambda x: nn.init.
+                                   constant_(x, 0), {"nonlinearity": "relu"})
+        else:
+            raise NotImplementedError("init function not implemented")
 
         self.conv1 = init_(nn.Conv2d(3, n_f_conv1, kernel_size=2, stride=1))
         #possibly batch or layer norm, neither was mentioned in the paper though
@@ -307,6 +313,11 @@ class DRRLBase(NNBase):
             # create attention module with n_heads heads and remember how many times to stack it
             self.n_att_stack = n_att_stack #how many times the attentional module is to be stacked (weight-sharing -> reuse)
             self.attMod = AttentionModule(conv2w*conv2h, att_elem_size, att_emb_size, n_heads)
+
+            for m in self.attMod.modules(): #.modules() iterates recursively
+                if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+                    init_(m)
+
         else:            # create baseline module of several residual-convolutional layers
             base_dict = {}
             for i in range(self.n_baseMods):
@@ -327,14 +338,14 @@ class DRRLBase(NNBase):
         # FC256 layers, 4 is default
         if n_fc_layers < 1:
             raise ValueError("At least 1 linear readout layer is required.")
-        fc_dict = OrderedDict([('fc1', nn.Linear(att_elem_size, hidden_size)),
+        fc_dict = OrderedDict([('fc1', init_(nn.Linear(att_elem_size, hidden_size))),
                                ('relu1', nn.ReLU())]) #first one has different inpuz size
         for i in range(n_fc_layers-1):
-            fc_dict[f"fc{i+2}"] = nn.Linear(hidden_size, hidden_size)
+            fc_dict[f"fc{i+2}"] = init_(nn.Linear(hidden_size, hidden_size))
             fc_dict[f"relu{i+2}"] = nn.ReLU()
         self.fc_seq = nn.Sequential(fc_dict) #sequential container from ordered dict
 
-        self.critic_linear = nn.Linear(hidden_size, 1)
+        self.critic_linear = init_(nn.Linear(hidden_size, 1))
 
         self.train()
 

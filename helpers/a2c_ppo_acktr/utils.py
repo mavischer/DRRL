@@ -55,6 +55,11 @@ def init(module, weight_init, bias_init, gain=1):
     bias_init(module.bias.data)
     return module
 
+def init_flexible(module, weight_init, bias_init, kwargs={"gain":1}):
+    weight_init(module.weight.data, **kwargs)
+    bias_init(module.bias.data)
+    return module
+
 
 def cleanup_log_dir(log_dir):
     try:

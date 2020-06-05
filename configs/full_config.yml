@@ -40,6 +40,12 @@ optimizer:
    RMSprop #RMSprop #or Adam
 lr:
    0.00001
+lr_decay:
+   True
+lr_term:
+   0.00005
+n_env_steps:
+   100000000
 update_every_n_steps: #only used in a2c_fast.py
    5
 e_schedule: #only used in a2c_dist.py
